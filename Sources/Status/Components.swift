@@ -14,6 +14,23 @@ enum Palette {
     }
 }
 
+// MARK: - Text
+
+/// 次要文字颜色。SwiftUI 的 .secondary/.tertiary 在毛玻璃窗口里会走 vibrancy 混合，
+/// 和背景糊在一起；这里用固定的不透明度，深浅色各自调到足够的对比度。
+enum Ink {
+    static let secondary = dynamic(dark: 0.76, light: 0.68)
+    static let tertiary = dynamic(dark: 0.58, light: 0.52)
+
+    private static func dynamic(dark: CGFloat, light: CGFloat) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor(white: 1, alpha: dark)
+                : NSColor(white: 0, alpha: light)
+        })
+    }
+}
+
 // MARK: - Card
 
 /// 磨砂玻璃卡片：半透明的亮色层 + 顶部更亮的细边，叠在面板的毛玻璃上
@@ -54,11 +71,11 @@ struct Tile<Accessory: View, Content: View>: View {
                     .foregroundStyle(tint)
                 Text(title)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Ink.secondary)
                 Spacer(minLength: 0)
                 accessory
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(Ink.tertiary)
             }
             content
         }
@@ -89,7 +106,7 @@ struct BigNumber: View {
                 .contentTransition(.numericText())
             Text(unit)
                 .font(.system(size: size * 0.5, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Ink.secondary)
         }
         .animation(.snappy(duration: 0.35), value: value)
     }
@@ -103,11 +120,11 @@ struct Legend: View {
     var body: some View {
         HStack(spacing: 5) {
             Circle().fill(color).frame(width: 6, height: 6)
-            Text(label).foregroundStyle(.secondary)
+            Text(label).foregroundStyle(Ink.secondary)
             Spacer(minLength: 4)
             Text(value).monospacedDigit()
         }
-        .font(.system(size: 10.5))
+        .font(.system(size: 11))
     }
 }
 

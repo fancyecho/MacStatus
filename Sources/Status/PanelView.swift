@@ -31,8 +31,8 @@ struct PanelView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text("\(SystemInfo.chip) · \(SystemInfo.osVersion) · 已运行 \(Fmt.uptime(monitor.uptime))")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Ink.secondary)
                     .lineLimit(1)
             }
             Spacer()
@@ -63,7 +63,7 @@ struct PanelView: View {
             .keyboardShortcut("q")
         }
         .font(.system(size: 11))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Ink.secondary)
         .buttonStyle(SubtleButtonStyle())
     }
 
@@ -108,8 +108,8 @@ struct PanelView: View {
                 Text("用户 \(Fmt.percent(monitor.cpu.user))%")
                 Text("系统 \(Fmt.percent(monitor.cpu.system))%")
             }
-            .font(.system(size: 10))
-            .foregroundStyle(.secondary)
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(Ink.secondary)
             .monospacedDigit()
         }
     }
@@ -123,8 +123,8 @@ struct PanelView: View {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 BigNumber(value: used, unit: unit)
                 Text("/ \(Fmt.memory(m.total))")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Ink.tertiary)
             }
             SegmentBar(segments: [
                 (Double(m.app), Palette.memory),
@@ -137,7 +137,7 @@ struct PanelView: View {
                 Legend(color: Palette.memory.opacity(0.6), label: "联动", value: Fmt.memory(m.wired))
                 Legend(color: Palette.memory.opacity(0.35), label: "压缩", value: Fmt.memory(m.compressed))
                 if m.swapUsed > 0 {
-                    Legend(color: .secondary.opacity(0.4), label: "交换", value: Fmt.memory(m.swapUsed))
+                    Legend(color: Ink.tertiary, label: "交换", value: Fmt.memory(m.swapUsed))
                 }
             }
         }
@@ -169,8 +169,8 @@ struct PanelView: View {
                 Label(Fmt.rate(d.write), systemImage: "arrow.up.doc").help("写入")
             }
             .labelStyle(CompactLabelStyle())
-            .font(.system(size: 10))
-            .foregroundStyle(.secondary)
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(Ink.secondary)
             .monospacedDigit()
         }
     }
@@ -192,8 +192,8 @@ struct PanelView: View {
                 Spacer()
                 Text("峰值 \(Fmt.rate(max(monitor.downHistory.max() ?? 0, monitor.upHistory.max() ?? 0)))")
             }
-            .font(.system(size: 10))
-            .foregroundStyle(.tertiary)
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(Ink.tertiary)
             .monospacedDigit()
         }
     }
@@ -227,7 +227,7 @@ private struct TemperatureBadge: View {
     let celsius: Double
 
     var body: some View {
-        let color: Color = celsius >= 95 ? .red : celsius >= 80 ? .orange : .secondary
+        let color: Color = celsius >= 95 ? .red : celsius >= 80 ? .orange : Ink.secondary
         HStack(spacing: 2) {
             Image(systemName: "thermometer.medium")
             Text(String(format: "%.0f°C", celsius)).monospacedDigit()
@@ -262,8 +262,8 @@ private struct BatteryCard: View {
             VStack(alignment: .leading, spacing: 1) {
                 BigNumber(value: "\(battery.percent)", unit: "%", size: 20)
                 Text(status)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Ink.secondary)
             }
             Spacer()
             Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 2) {
@@ -272,7 +272,7 @@ private struct BatteryCard: View {
                 if let temp = battery.temperature { stat("温度", String(format: "%.1f°C", temp)) }
                 if let watts = battery.watts { stat("功率", String(format: "%.1f W", watts)) }
             }
-            .font(.system(size: 10.5))
+            .font(.system(size: 11))
         }
         .padding(10)
         .card()
@@ -288,7 +288,7 @@ private struct BatteryCard: View {
 
     private func stat(_ label: String, _ value: String) -> some View {
         GridRow {
-            Text(label).foregroundStyle(.secondary)
+            Text(label).foregroundStyle(Ink.secondary)
             Text(value).monospacedDigit().gridColumnAlignment(.trailing)
         }
     }
@@ -336,10 +336,10 @@ private struct ProcessCard: View {
             HStack {
                 Image(systemName: "list.bullet")
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Ink.secondary)
                 Text("进程")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Ink.secondary)
                 Spacer()
                 Picker("", selection: $prefs.processSort) {
                     Text("CPU").tag(Preferences.ProcessSort.cpu)
@@ -363,7 +363,7 @@ private struct ProcessCard: View {
                         Spacer(minLength: 8)
                         Text(prefs.processSort == .cpu ? String(format: "%.1f%%", row.cpu) : Fmt.memory(row.memory))
                             .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Ink.secondary)
                     }
                     .font(.system(size: 12))
                     .frame(height: 20)
@@ -423,7 +423,7 @@ private struct SettingsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Ink.secondary)
                 .padding(.leading, 2)
             VStack(spacing: 2, content: content)
                 .font(.system(size: 12))
@@ -437,7 +437,7 @@ private struct SettingsView: View {
         HStack {
             Image(systemName: symbol)
                 .frame(width: 18)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Ink.secondary)
             Text(title)
             Spacer()
             Toggle("", isOn: binding)
