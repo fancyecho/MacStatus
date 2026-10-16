@@ -1,14 +1,31 @@
+<p align="center"><img src="docs/icon.png" width="128" alt="Status icon"></p>
+
 # Status
 
 A lightweight native macOS menu bar system monitor built with SwiftUI. It needs no Xcode; Command Line Tools is enough to build it.
 
 ![面板](docs/panel-dark.png)
 
-## Build and install
+## Download
+
+Download `Status-x.x.dmg` from [Releases](https://github.com/fancyecho/MacStatus/releases/latest), open it, and drag Status into Applications. It's a universal app (Apple Silicon + Intel) and needs macOS 14 or later.
+
+The app isn't notarized by Apple, so the first launch will say it "can't verify the developer". Either:
+
+- open **System Settings → Privacy & Security**, find the note about Status at the bottom, and click **Open Anyway**; or
+- run this once in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Status.app
+```
+
+## Build from source
 
 ```bash
 ./build.sh            # builds into build/Status.app
 ./build.sh --install  # copies to /Applications and launches it
+./build.sh --dmg      # packages build/Status-<version>.dmg
+scripts/make-icon.sh  # regenerates the app icon (after editing scripts/make-icon.swift)
 ```
 
 ## Features
@@ -26,6 +43,6 @@ The panel only refreshes the UI while it's open. The menu bar redraws only when 
 ## Debug
 
 ```bash
-STATUS_SNAPSHOT=/some/dir .build/release/Status   # renders the panel to PNGs and exits
-STATUS_CHECK_PANEL=1 .build/release/Status         # opens the panel and prints its position relative to the menu bar icon
+STATUS_SNAPSHOT=/some/dir build/Status.app/Contents/MacOS/Status  # renders the panel to PNGs and exits
+STATUS_CHECK_PANEL=1 build/Status.app/Contents/MacOS/Status        # opens the panel and prints its position relative to the menu bar icon
 ```
