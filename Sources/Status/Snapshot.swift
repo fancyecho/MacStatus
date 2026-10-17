@@ -16,12 +16,18 @@ enum Snapshot {
         let delay = Double(env["STATUS_SNAPSHOT_DELAY"] ?? "") ?? 7
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             for dark in [false, true] {
-                prefs.showingSettings = false
+                prefs.page = .overview
                 capture(PanelPreview(), monitor: monitor, prefs: prefs, dark: dark, to: "\(dir)/panel-\(dark ? "dark" : "light").png")
             }
-            prefs.showingSettings = true
+            prefs.page = .settings
             capture(PanelPreview(), monitor: monitor, prefs: prefs, dark: false, to: "\(dir)/settings.png")
-            prefs.showingSettings = false
+            if monitor.battery != nil {
+                prefs.page = .battery
+                for dark in [false, true] {
+                    capture(PanelPreview(), monitor: monitor, prefs: prefs, dark: dark, to: "\(dir)/battery-\(dark ? "dark" : "light").png")
+                }
+            }
+            prefs.page = .overview
             for dark in [false, true] {
                 capture(MenuBarStrip(values: monitor.menuBar.values, prefs: prefs), monitor: monitor, prefs: prefs, dark: dark,
                         to: "\(dir)/menubar-\(dark ? "dark" : "light").png")
@@ -59,7 +65,7 @@ enum Snapshot {
             after(7.5) {
                 describe("overview")
                 print("heights over 6 ticks: \(heights)")
-                prefs.showingSettings = true
+                prefs.page = .settings
                 after(1) {
                     describe("settings")
                     print("trusted for synthetic clicks: \(AXIsProcessTrusted())")

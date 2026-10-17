@@ -7,19 +7,23 @@ struct PanelView: View {
     var body: some View {
         VStack(spacing: 8) {
             header
-            if prefs.showingSettings {
-                SettingsView()
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-            } else {
+            switch prefs.page {
+            case .overview:
                 overview
                     .transition(.opacity.combined(with: .move(edge: .leading)))
+            case .settings:
+                SettingsView()
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+            case .battery:
+                BatteryDetailView()
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
             footer
         }
         .padding(Metrics.panelPadding)
         .padding(.top, 2)
         .frame(width: 340)
-        .animation(.snappy(duration: 0.25), value: prefs.showingSettings)
+        .animation(.snappy(duration: 0.25), value: prefs.page)
     }
 
     // MARK: Header / Footer
@@ -36,15 +40,15 @@ struct PanelView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Button { prefs.showingSettings.toggle() } label: {
-                Image(systemName: prefs.showingSettings ? "xmark" : "slider.horizontal.3")
+            Button { prefs.page = prefs.page == .overview ? .settings : .overview } label: {
+                Image(systemName: prefs.page == .overview ? "slider.horizontal.3" : "xmark")
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16, height: 16)
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(SubtleButtonStyle())
             .keyboardShortcut(",")
-            .help(prefs.showingSettings ? "返回（Esc）" : "设置（⌘,）")
+            .help(prefs.page == .overview ? "设置（⌘,）" : "返回（Esc）")
         }
         .padding(.horizontal, 2)
         .padding(.bottom, 2)
@@ -85,7 +89,9 @@ struct PanelView: View {
             .fixedSize(horizontal: false, vertical: true)
 
             networkCard
-            if let battery = monitor.battery { BatteryCard(battery: battery) }
+            if let battery = monitor.battery {
+                BatterySummaryCard(battery: battery) { prefs.page = .battery }
+            }
             ProcessCard()
         }
     }
@@ -251,85 +257,6 @@ private struct PressureBadge: View {
         }
         .foregroundStyle(color)
         .help("系统内存压力升高，可能开始频繁压缩或使用交换空间，可以关闭一些占内存的应用。")
-    }
-}
-
-private struct BatteryCard: View {
-    let battery: BatterySnapshot
-
-    var body: some View {
-        HStack(spacing: 12) {
-            BatteryGlyph(percent: battery.percent, charging: battery.isCharging)
-            VStack(alignment: .leading, spacing: 1) {
-                BigNumber(value: "\(battery.percent)", unit: "%", size: 20)
-                Text(status)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Ink.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            // 固定四行，数据暂缺时显示占位，避免卡片高度跳动
-            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 2) {
-                stat("健康度", battery.health.map { "\($0)%" })
-                stat("循环", battery.cycles.map { "\($0)" })
-                stat("温度", battery.temperature.map { String(format: "%.1f°C", $0) })
-                stat("功率", battery.watts.map { String(format: "%.1f W", $0) })
-            }
-            .font(.system(size: 11))
-            .lineLimit(1)
-        }
-        .padding(11)
-        .card()
-    }
-
-    private var status: String {
-        if battery.isCharging {
-            return battery.minutesRemaining.map { "充电中 · \(Fmt.minutes($0)) 后充满" } ?? "充电中"
-        }
-        if battery.onAC { return "已接通电源" }
-        return battery.minutesRemaining.map { "剩余 \(Fmt.minutes($0))" } ?? "使用电池"
-    }
-
-    private func stat(_ label: String, _ value: String?) -> some View {
-        GridRow {
-            Text(label).foregroundStyle(Ink.secondary)
-            Text(value ?? "—")
-                .monospacedDigit()
-                .foregroundStyle(value == nil ? Ink.tertiary : .primary)
-                .gridColumnAlignment(.trailing)
-        }
-    }
-}
-
-private struct BatteryGlyph: View {
-    let percent: Int
-    let charging: Bool
-
-    var body: some View {
-        let tint = percent <= 20 && !charging ? Color.red : Palette.battery
-        ZStack {
-            HStack(spacing: 1.5) {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.35), lineWidth: 1.2)
-                    .overlay(alignment: .leading) {
-                        GeometryReader { geo in
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(tint)
-                                .frame(width: max(3, (geo.size.width - 5) * CGFloat(percent) / 100))
-                                .padding(2.5)
-                        }
-                    }
-                    .frame(width: 34, height: 18)
-                Capsule().fill(Color.primary.opacity(0.35)).frame(width: 2, height: 6)
-            }
-            if charging {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.3), radius: 1)
-                    .offset(x: -2)
-            }
-        }
     }
 }
 

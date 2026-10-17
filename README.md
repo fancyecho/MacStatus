@@ -32,7 +32,10 @@ scripts/make-icon.sh  # regenerates the app icon (after editing scripts/make-ico
 
 - **Menu bar**: CPU, CPU temperature, memory, GPU, network speed and battery, each toggled independently. It is rendered as a template image, so it adapts to light and dark menu bars automatically.
 - **Panel**: a frosted-glass panel attached under the menu bar icon. Click the icon to open or close it; clicking elsewhere or pressing Esc also closes it, and ⌘, opens settings. CPU (history curve, per-core bars, temperature), memory (app / wired / compressed / swap breakdown; a badge appears only when memory pressure is high), GPU, disk (free space, read/write speed), network (mirrored up/down chart), battery (health, cycle count, temperature, power draw), and top 5 processes by CPU or memory.
+- **Battery details** (click the battery card): power flow (adapter input = computer consumption + power into the battery), computer power history, max capacity / health, cycle count, temperature, voltage, current, and capacity in mAh.
 - **Settings**: refresh interval of 1/2/3/5 seconds, launch at login.
+
+<p align="center"><img src="docs/battery.png" width="380" alt="Battery details (sample data)"><br><sub>Battery details page (sample data)</sub></p>
 
 GPU, battery and temperature hide automatically when the data isn't available (for example in a virtual machine or on a desktop Mac). Temperature reads Apple Silicon's HID temperature sensors (M1/M2 use the pACC/eACC sensors, newer chips use the PMU die temperature); there is no public API for this, so it is loaded dynamically, and if a future system changes it, it simply won't be shown.
 
@@ -46,4 +49,5 @@ The panel only refreshes the UI while it's open. The menu bar redraws only when 
 STATUS_SNAPSHOT=/some/dir build/Status.app/Contents/MacOS/Status  # renders the panel to PNGs and exits
 STATUS_CHECK_PANEL=1 build/Status.app/Contents/MacOS/Status        # opens the panel, checks position, height stability and click-to-close
 STATUS_DEMO=1 build/Status.app/Contents/MacOS/Status              # fills GPU / temperature / battery with simulated data to check layout
+/Applications/Status.app/Contents/MacOS/Status --battery-info   # prints the raw battery fields and how they were parsed (no serial numbers)
 ```

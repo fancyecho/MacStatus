@@ -14,8 +14,10 @@ final class Preferences: ObservableObject {
     @Published var interval: Double { didSet { defaults.set(interval, forKey: "interval") } }
     @Published var processSort: ProcessSort { didSet { defaults.set(processSort.rawValue, forKey: "processSort") } }
 
-    /// 面板当前是否显示设置页（不持久化）
-    @Published var showingSettings = false
+    /// 面板当前显示的页面（不持久化）
+    @Published var page: Page = .overview
+
+    enum Page { case overview, settings, battery }
 
     enum ProcessSort: String, CaseIterable { case cpu, memory }
 
@@ -87,6 +89,8 @@ final class SystemMonitor: ObservableObject {
     private(set) var gpuHistory: [Double] = []
     private(set) var downHistory: [Double] = []
     private(set) var upHistory: [Double] = []
+    private(set) var systemPowerHistory: [Double] = []
+    private(set) var batteryPowerHistory: [Double] = []
 
     var panelVisible = false {
         didSet {
@@ -140,7 +144,14 @@ final class SystemMonitor: ObservableObject {
             topByCPU = processes.byCPU
             topByMemory = processes.byMemory
         }
-        if full || tickCount % 5 == 0 { battery = BatterySampler.sample() }
+        // 电池详情要看实时功率，面板打开时每次都采样
+        if full || panelVisible || tickCount % 5 == 0 {
+            battery = BatterySampler.sample()
+            if !full, let battery {
+                Self.push(battery.systemPower ?? 0, to: &systemPowerHistory)
+                Self.push(battery.batteryPower ?? 0, to: &batteryPowerHistory)
+            }
+        }
         if full || panelVisible || prefs.showTemperature || tickCount % 5 == 0 {
             temperature = temperatureSampler.sample()
         }
@@ -181,8 +192,19 @@ final class SystemMonitor: ObservableObject {
         let wide = tickCount % 2 == 0
         disk.read = wide ? 123_400_000 : 820
         disk.write = wide ? 4_560 : 98_700_000
-        battery = BatterySnapshot(percent: 78, isCharging: false, onAC: false, minutesRemaining: wide ? 312 : nil,
-                                  health: 98, cycles: 41, temperature: 31.2, watts: wide ? 6.4 : nil)
+        // 偶数次模拟接电源充电，奇数次模拟使用电池
+        let system = Double.random(in: 6...11)
+        var b = BatterySnapshot(percent: 78, isCharging: wide, onAC: wide, minutesRemaining: wide ? 72 : 312,
+                                health: 92, cycles: 312, designCycles: 1000, temperature: 31.4,
+                                currentCapacity: 3420, fullCapacity: 4210, designCapacity: 4563,
+                                voltage: 12.61, adapterWatts: wide ? 35 : nil, adapterName: wide ? "USB-C 电源适配器" : nil)
+        b.batteryPower = wide ? 18.6 : -system
+        b.amperage = (b.batteryPower ?? 0) / 12.61
+        b.systemPower = system
+        b.adapterPower = wide ? system + 18.6 : nil
+        battery = b
+        Self.push(system, to: &systemPowerHistory)
+        Self.push(b.batteryPower ?? 0, to: &batteryPowerHistory)
     }
 
     private static func push(_ value: Double, to history: inout [Double]) {

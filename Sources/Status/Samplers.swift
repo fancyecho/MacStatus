@@ -49,11 +49,30 @@ struct BatterySnapshot {
     var percent: Int = 0
     var isCharging = false
     var onAC = false
+    var fullyCharged = false
     var minutesRemaining: Int?
-    var health: Int?
+
+    // 健康
+    var health: Int?              // 满充容量 / 设计容量，对应系统设置里的"最大容量"
     var cycles: Int?
-    var temperature: Double?
-    var watts: Double?
+    var designCycles: Int?
+    var temperature: Double?      // °C
+    var currentCapacity: Int?     // mAh
+    var fullCapacity: Int?        // mAh
+    var designCapacity: Int?      // mAh
+
+    // 电气参数
+    var voltage: Double?          // V
+    var amperage: Double?         // A，充电为正，放电为负
+
+    // 功率流向（W）
+    var adapterPower: Double?     // 适配器实际输入
+    var systemPower: Double?      // 电脑本身消耗
+    var batteryPower: Double?     // 进出电池，充电为正，放电为负
+
+    // 电源适配器
+    var adapterWatts: Int?        // 额定功率
+    var adapterName: String?
 }
 
 struct ProcessEntry: Identifiable {
@@ -309,35 +328,141 @@ enum BatterySampler {
             snapshot.percent = Int((Double(current) / Double(maximum) * 100).rounded())
             snapshot.isCharging = info[kIOPSIsChargingKey] as? Bool ?? false
             snapshot.onAC = info[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue
+            snapshot.fullyCharged = info[kIOPSIsChargedKey] as? Bool ?? false
             let minutes = snapshot.isCharging ? info[kIOPSTimeToFullChargeKey] as? Int : info[kIOPSTimeToEmptyKey] as? Int
             if let minutes, minutes > 0 { snapshot.minutesRemaining = minutes }
-            addSmartBatteryDetails(to: &snapshot)
+            if let registry = smartBatteryProperties() {
+                apply(registry, to: &snapshot)
+            }
             return snapshot
         }
         return nil
     }
 
-    private static func addSmartBatteryDetails(to snapshot: inout BatterySnapshot) {
+    static func smartBatteryProperties() -> [String: Any]? {
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
-        guard service != 0 else { return }
+        guard service != 0 else { return nil }
         defer { IOObjectRelease(service) }
-
         var properties: Unmanaged<CFMutableDictionary>?
-        guard IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-              let dict = properties?.takeRetainedValue() as? [String: Any] else { return }
+        guard IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0) == KERN_SUCCESS else { return nil }
+        return properties?.takeRetainedValue() as? [String: Any]
+    }
 
-        func number(_ key: String) -> Int64? { (dict[key] as? NSNumber)?.int64Value }
+    /// 不同机型 / 系统版本的字段位置不一样：有的在顶层，有的在 BatteryData 里，所以每项都按顺序尝试多个来源
+    private static func apply(_ dict: [String: Any], to s: inout BatterySnapshot) {
+        let batteryData = dict["BatteryData"] as? [String: Any] ?? [:]
+        let telemetry = dict["PowerTelemetryData"] as? [String: Any] ?? [:]
+        let adapter = dict["AdapterDetails"] as? [String: Any] ?? [:]
 
-        snapshot.cycles = number("CycleCount").map(Int.init)
-        if let temp = number("Temperature") { snapshot.temperature = Double(temp) / 100 }
-        if let design = number("DesignCapacity"), design > 0,
-           let raw = number("AppleRawMaxCapacity") ?? number("NominalChargeCapacity") {
-            snapshot.health = min(100, Int((Double(raw) / Double(design) * 100).rounded()))
+        /// IORegistry 里的负数以无符号 64 位存储，int64Value 会按位还原成负数
+        func number(_ sources: [([String: Any], String)]) -> Int64? {
+            for (d, key) in sources {
+                if let n = d[key] as? NSNumber { return n.int64Value }
+                // 有些字段是数组（例如 Qmax 按电芯分开），取平均
+                if let list = d[key] as? [NSNumber], !list.isEmpty {
+                    return list.map(\.int64Value).reduce(0, +) / Int64(list.count)
+                }
+            }
+            return nil
         }
-        if let voltage = number("Voltage"), let amperage = number("InstantAmperage") ?? number("Amperage") {
-            let amps = Double(Int32(truncatingIfNeeded: amperage)) / 1000
-            let watts = abs(Double(voltage) / 1000 * amps)
-            if watts > 0.05 { snapshot.watts = watts }
+        func positive(_ value: Int64?) -> Int? { value.flatMap { $0 > 0 ? Int($0) : nil } }
+
+        // 容量与健康
+        s.cycles = positive(number([(dict, "CycleCount"), (batteryData, "CycleCount")]))
+        s.designCycles = positive(number([(dict, "DesignCycleCount9C"), (batteryData, "DesignCycleCount9C")]))
+        s.designCapacity = positive(number([(dict, "DesignCapacity"), (batteryData, "DesignCapacity")]))
+        s.fullCapacity = positive(number([(dict, "NominalChargeCapacity"), (dict, "AppleRawMaxCapacity"),
+                                          (batteryData, "NominalChargeCapacity"), (batteryData, "Qmax")]))
+        s.currentCapacity = positive(number([(dict, "AppleRawCurrentCapacity"), (batteryData, "RemainingCapacity")]))
+        if let design = s.designCapacity, let full = s.fullCapacity {
+            let ratio = Double(full) / Double(design) * 100
+            if ratio > 30 && ratio < 130 { s.health = min(100, Int(ratio.rounded())) }
+        }
+
+        // 温度：顶层是 0.01°C；少数机型只在 BatteryData 里提供，单位可能是 0.1K，按合理范围判断
+        for raw in [number([(dict, "Temperature")]), number([(dict, "VirtualTemperature")]),
+                    number([(batteryData, "Temperature")])].compactMap({ $0 }) {
+            let celsius = Double(raw) / 100
+            let fromKelvin = Double(raw) / 10 - 273.15
+            if (5...80).contains(celsius) { s.temperature = celsius; break }
+            if (5...80).contains(fromKelvin) { s.temperature = fromKelvin; break }
+        }
+
+        // 电压电流
+        if let mv = number([(dict, "Voltage"), (dict, "AppleRawBatteryVoltage"), (batteryData, "Voltage")]), mv > 0 {
+            s.voltage = Double(mv) / 1000
+        }
+        if let ma = number([(dict, "InstantAmperage"), (dict, "Amperage")]) {
+            s.amperage = Double(Int32(truncatingIfNeeded: ma)) / 1000
+        }
+        if let v = s.voltage, let a = s.amperage {
+            s.batteryPower = v * a
+        }
+
+        // 功率遥测（Apple 芯片）：单位 mW
+        func watts(_ key: String) -> Double? {
+            guard let mw = number([(telemetry, key)]) else { return nil }
+            let w = Double(mw) / 1000
+            return abs(w) < 500 ? w : nil
+        }
+        let onAC = s.onAC || (dict["ExternalConnected"] as? Bool ?? false)
+        s.onAC = onAC
+        if let load = watts("SystemLoad"), load > 0 { s.systemPower = load }
+        if onAC, let input = watts("SystemPowerIn"), input > 0 { s.adapterPower = input }
+
+        // 没有遥测时用能量守恒推算：输入 = 系统消耗 + 充入电池
+        let charging = max(s.batteryPower ?? 0, 0)
+        if s.systemPower == nil {
+            if onAC, let input = s.adapterPower {
+                s.systemPower = max(input - charging, 0)
+            } else if !onAC, let battery = s.batteryPower {
+                s.systemPower = abs(battery)
+            }
+        }
+        if onAC, s.adapterPower == nil, let system = s.systemPower {
+            s.adapterPower = system + charging
+        }
+
+        // 适配器
+        s.adapterWatts = positive(number([(adapter, "Watts")]))
+        if let name = adapter["Name"] as? String, !name.isEmpty {
+            s.adapterName = name
+        } else if let description = adapter["Description"] as? String, !description.isEmpty {
+            s.adapterName = description.lowercased().contains("pd") ? "USB-C 电源适配器" : description
+        }
+    }
+
+    /// --battery-info：打印解析结果和相关原始字段，用来核对不同机型上的字段
+    static func printDiagnostics() {
+        guard let snapshot = sample() else {
+            print("没有找到内置电池")
+            return
+        }
+        print("== 解析结果 ==")
+        print(String(describing: snapshot).replacingOccurrences(of: ", ", with: "\n  "))
+
+        guard let dict = smartBatteryProperties() else {
+            print("读不到 AppleSmartBattery")
+            return
+        }
+        // 只输出和电量、功率有关的字段，不输出序列号等信息
+        let keys = ["CycleCount", "DesignCycleCount9C", "DesignCapacity", "NominalChargeCapacity", "AppleRawMaxCapacity",
+                    "AppleRawCurrentCapacity", "CurrentCapacity", "MaxCapacity", "Temperature", "VirtualTemperature",
+                    "Voltage", "AppleRawBatteryVoltage", "Amperage", "InstantAmperage", "ExternalConnected",
+                    "IsCharging", "FullyCharged", "RemainingCapacity", "Qmax", "StateOfCharge", "Watts", "Name",
+                    "Description", "Current", "SystemPowerIn", "SystemLoad", "BatteryPower", "SystemVoltageIn",
+                    "SystemCurrentIn", "AdapterEfficiencyLoss"]
+        func dump(_ title: String, _ d: [String: Any]) {
+            print("== \(title) ==")
+            for key in keys.sorted() where d[key] != nil {
+                print("  \(key) = \(d[key]!)")
+            }
+            let nested = d.keys.filter { d[$0] is [String: Any] }.sorted()
+            if !nested.isEmpty { print("  (子字典: \(nested.joined(separator: ", ")))") }
+        }
+        dump("AppleSmartBattery", dict)
+        for name in ["BatteryData", "PowerTelemetryData", "AdapterDetails"] {
+            if let nested = dict[name] as? [String: Any] { dump(name, nested) }
         }
     }
 }

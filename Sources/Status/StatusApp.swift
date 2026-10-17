@@ -5,6 +5,14 @@ import SwiftUI
 struct StatusApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
+    init() {
+        // Status --battery-info：打印电池原始数据后退出，用于排查字段
+        if CommandLine.arguments.contains("--battery-info") {
+            BatterySampler.printDiagnostics()
+            exit(0)
+        }
+    }
+
     var body: some Scene {
         // 界面全部由 AppDelegate 里的状态栏图标和自定义面板负责
         Settings { EmptyView() }
@@ -39,13 +47,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !visible {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                     guard let self, !self.panel.isShown else { return }
-                    self.prefs.showingSettings = false
+                    self.prefs.page = .overview
                 }
             }
         }
         panel.onEscape = { [weak self] in
-            guard let self, self.prefs.showingSettings else { return false }
-            self.prefs.showingSettings = false
+            guard let self, self.prefs.page != .overview else { return false }
+            self.prefs.page = .overview
             return true
         }
 

@@ -293,7 +293,7 @@ struct SubtleButtonStyle: ButtonStyle {
 }
 
 /// CLT 自带的 SDK 里 @State 是宏且缺少插件，所以用 StateObject 保存悬停状态
-private final class HoverState: ObservableObject {
+final class HoverState: ObservableObject {
     @Published var hovering = false
 }
 
@@ -311,6 +311,30 @@ private struct HoverHighlight<Label: View>: View {
                     .fill(Color.primary.opacity(pressed ? 0.14 : state.hovering ? 0.08 : 0))
             )
             .contentShape(Rectangle())
+            .onHover { state.hovering = $0 }
+    }
+}
+
+/// 可点击的卡片：悬停时轻微提亮，按下时略微缩小
+struct CardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        CardHover(pressed: configuration.isPressed) { configuration.label }
+    }
+}
+
+private struct CardHover<Label: View>: View {
+    let pressed: Bool
+    @ViewBuilder var label: Label
+    @StateObject private var state = HoverState()
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous)
+        label
+            .overlay(shape.fill(Color.primary.opacity(pressed ? 0.07 : state.hovering ? 0.035 : 0)).allowsHitTesting(false))
+            .contentShape(shape)
+            .scaleEffect(pressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.12), value: state.hovering)
+            .animation(.easeOut(duration: 0.12), value: pressed)
             .onHover { state.hovering = $0 }
     }
 }
