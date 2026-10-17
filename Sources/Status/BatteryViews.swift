@@ -8,12 +8,29 @@ private enum PowerPalette {
     static let adapter = Color(red: 1.0, green: 0.74, blue: 0.25)
 }
 
-private func batteryStatus(_ b: BatterySnapshot) -> String {
-    if b.isCharging {
-        return b.minutesRemaining.map { "充电中 · \(Fmt.minutes($0)) 后充满" } ?? "充电中"
+/// 状态（不含时间），例如"充电中 · 低电量模式"
+private func batteryState(_ b: BatterySnapshot, _ e: BatteryEstimate?) -> String {
+    let state: String = switch e?.kind {
+    case .toFull, .toLimit: "充电中"
+    case .atLimit(let limit): "已达充电上限 \(limit)%"
+    case .full: "已充满"
+    case .paused: "已接通电源 · 暂停充电"
+    case .remaining, nil: b.onAC ? "已接通电源" : "使用电池"
     }
-    if b.onAC { return b.fullyCharged || b.percent >= 100 ? "已充满 · 使用电源供电" : "已接通电源 · 暂未充电" }
-    return b.minutesRemaining.map { "使用电池 · 剩余 \(Fmt.minutes($0))" } ?? "使用电池"
+    return b.lowPowerMode ? state + " · 低电量模式" : state
+}
+
+/// 概览卡片用的一行摘要，例如"充电中 · 1:12 后到 90%"
+private func batterySummary(_ b: BatterySnapshot, _ e: BatteryEstimate?) -> String {
+    guard let e else { return batteryState(b, nil) }
+    // "1:12 后充满" / "38 分钟后充满"：汉字结尾时不再加空格
+    let time = e.minutes.map { $0 >= 60 ? Fmt.minutes($0) + " " : Fmt.minutes($0) }
+    switch e.kind {
+    case .toFull: return "充电中 · " + (time.map { "\($0)后充满" } ?? "估算中")
+    case .toLimit(let limit): return "充电中 · " + (time.map { "\($0)后到 \(limit)%" } ?? "估算中")
+    case .remaining: return "使用电池 · " + (time.map { "剩余 \($0)" } ?? "估算中")
+    default: return batteryState(b, e)
+    }
 }
 
 private func wattText(_ value: Double?, signed: Bool = false) -> String {
@@ -26,11 +43,14 @@ private func wattText(_ value: Double?, signed: Bool = false) -> String {
 struct BatteryGlyph: View {
     let percent: Int
     let charging: Bool
+    var lowPower = false
     var width: CGFloat = 34
 
     var body: some View {
         let height = width * 0.53
-        let tint = percent <= 20 && !charging ? Color.red : Palette.battery
+        // 和系统一致：低电量模式黄色，电量低且没在充电时红色，其余绿色
+        let tint = lowPower ? Color(red: 1.0, green: 0.8, blue: 0.0)
+            : percent <= 20 && !charging ? Color.red : Palette.battery
         ZStack {
             HStack(spacing: 1.5) {
                 RoundedRectangle(cornerRadius: height * 0.28, style: .continuous)
@@ -62,19 +82,21 @@ struct BatteryGlyph: View {
 /// 概览里的电池摘要，点击进入电池详情
 struct BatterySummaryCard: View {
     let battery: BatterySnapshot
+    let estimate: BatteryEstimate?
     let open: () -> Void
 
     var body: some View {
         Button(action: open) {
             HStack(spacing: 10) {
-                BatteryGlyph(percent: battery.percent, charging: battery.isCharging)
+                BatteryGlyph(percent: battery.percent, charging: battery.isCharging, lowPower: battery.lowPowerMode)
                 VStack(alignment: .leading, spacing: 1) {
                     BigNumber(value: "\(battery.percent)", unit: "%", size: 20)
-                    Text(batteryStatus(battery))
+                    Text(batterySummary(battery, estimate))
                         .font(.system(size: 11))
                         .foregroundStyle(Ink.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.9)
+                        .frame(height: 14)
                 }
                 Spacer(minLength: 4)
                 VStack(spacing: 2) {
@@ -103,8 +125,8 @@ struct BatteryDetailView: View {
     var body: some View {
         if let battery = monitor.battery {
             VStack(spacing: 8) {
-                hero(battery)
-                PowerFlowCard(battery: battery,
+                hero(battery, monitor.batteryEstimate)
+                PowerFlowCard(battery: battery, estimate: monitor.batteryEstimate,
                               systemHistory: monitor.systemPowerHistory,
                               batteryHistory: monitor.batteryPowerHistory)
                 HealthCard(battery: battery)
@@ -118,46 +140,82 @@ struct BatteryDetailView: View {
         }
     }
 
-    private func hero(_ b: BatterySnapshot) -> some View {
+    private func hero(_ b: BatterySnapshot, _ e: BatteryEstimate?) -> some View {
         HStack(spacing: 14) {
-            BatteryGlyph(percent: b.percent, charging: b.isCharging, width: 46)
+            BatteryGlyph(percent: b.percent, charging: b.isCharging, lowPower: b.lowPowerMode, width: 46)
             VStack(alignment: .leading, spacing: 2) {
                 BigNumber(value: "\(b.percent)", unit: "%", size: 28)
-                Text(batteryStatus(b))
+                Text(batteryState(b, e))
                     .font(.system(size: 11.5))
-                    .foregroundStyle(Ink.secondary)
+                    .foregroundStyle(b.lowPowerMode ? Color(red: 0.85, green: 0.62, blue: 0.0) : Ink.secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .frame(height: 15)
             }
             Spacer(minLength: 0)
-            if b.onAC {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Label(b.adapterWatts.map { "\($0) W" } ?? "电源", systemImage: "powerplug.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(PowerPalette.adapter)
-                    Text(b.adapterName ?? "电源适配器")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Ink.tertiary)
-                        .lineLimit(1)
-                }
-                .help("适配器额定功率")
-            }
+            TimeEstimateView(estimate: e)
         }
         .padding(12)
         .card()
     }
 }
 
+/// 右侧的时间：大号数字 + 说明，例如"1 小时 12 分 / 充到 90% 还需"
+private struct TimeEstimateView: View {
+    let estimate: BatteryEstimate?
+
+    var body: some View {
+        if let e = estimate, let caption = caption(e.kind) {
+            VStack(alignment: .trailing, spacing: 2) {
+                if let minutes = e.minutes {
+                    HStack(alignment: .firstTextBaseline, spacing: 1) {
+                        ForEach(Array(Fmt.durationParts(minutes).enumerated()), id: \.offset) { _, part in
+                            Text(part.0)
+                                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                            Text(part.1)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Ink.secondary)
+                                .padding(.trailing, 2)
+                        }
+                    }
+                } else {
+                    Text("估算中…")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Ink.secondary)
+                }
+                Text(caption)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(Ink.tertiary)
+            }
+            .help(e.fromSystem ? "系统给出的估计" : "按最近约一分钟的平均功率估算，充电接近上限时会变慢，实际可能稍长")
+        }
+    }
+
+    private func caption(_ kind: BatteryEstimate.Kind) -> String? {
+        switch kind {
+        case .toFull: "充满还需"
+        case .toLimit(let limit): "充到 \(limit)% 还需"
+        case .remaining: "预计还能使用"
+        default: nil
+        }
+    }
+}
+
 /// 输入 = 系统 + 电池：用三栏数字 + 一根分段条说明电从哪来、到哪去
 private struct PowerFlowCard: View {
     let battery: BatterySnapshot
+    let estimate: BatteryEstimate?
     let systemHistory: [Double]
     let batteryHistory: [Double]
 
     var body: some View {
         let b = battery
         Tile(title: "电源流向", symbol: "bolt.fill", tint: PowerPalette.adapter) {
-            if let peak = systemHistory.max(), peak > 0 {
-                Text(String(format: "峰值 %.1f W", peak)).monospacedDigit()
+            if b.onAC {
+                Text(verbatim: [b.adapterWatts.map { "\($0) W" }, b.adapterName].compactMap { $0 }.joined(separator: " "))
+                    .lineLimit(1)
+                    .help("电源适配器额定功率")
             }
         } content: {
             HStack(alignment: .top, spacing: 0) {
@@ -173,13 +231,12 @@ private struct PowerFlowCard: View {
             Text(caption)
                 .font(.system(size: 11))
                 .foregroundStyle(Ink.secondary)
-                .lineLimit(2, reservesSpace: true)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(2)
+                // 固定两行高度：说明文字一行或两行时卡片都不跳
+                .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .topLeading)
             VStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Legend(color: PowerPalette.system, label: "电脑消耗 · 最近 \(historyMinutes) 分钟", value: "")
-                    Spacer()
-                }
+                Legend(color: PowerPalette.system, label: "电脑消耗 · 最近 \(historyMinutes) 分钟",
+                       value: systemHistory.max().map { String(format: "峰值 %.1f W", $0) } ?? "")
                 Sparkline(values: systemHistory, tint: PowerPalette.system)
                     .frame(height: 40)
             }
@@ -199,6 +256,9 @@ private struct PowerFlowCard: View {
         let system = wattText(b.systemPower)
         let charge = max(b.batteryPower ?? 0, 0)
         if b.onAC {
+            if case .atLimit(let limit) = estimate?.kind {
+                return "已达到充电上限 \(limit)%，电源只为电脑供电（\(system)）。"
+            }
             if charge >= 0.05 {
                 return "电源输入 \(wattText(b.adapterPower))，其中 \(system) 供电脑运行，\(wattText(charge)) 充入电池。"
             }
@@ -237,6 +297,7 @@ private struct PowerFlowCard: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+                .frame(height: 18)
                 .contentTransition(.numericText())
             Text(title)
                 .font(.system(size: 10.5, weight: .medium))
@@ -315,6 +376,7 @@ private struct HealthCard: View {
                 .foregroundStyle(value == nil ? Ink.tertiary : .primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
+                .frame(height: 16)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

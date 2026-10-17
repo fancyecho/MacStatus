@@ -32,8 +32,11 @@ scripts/make-icon.sh  # regenerates the app icon (after editing scripts/make-ico
 
 - **Menu bar**: CPU, CPU temperature, memory, GPU, network speed and battery, each toggled independently. It is rendered as a template image, so it adapts to light and dark menu bars automatically.
 - **Panel**: a frosted-glass panel attached under the menu bar icon. Click the icon to open or close it; clicking elsewhere or pressing Esc also closes it, and ⌘, opens settings. CPU (history curve, per-core bars, temperature), memory (app / wired / compressed / swap breakdown; a badge appears only when memory pressure is high), GPU, disk (free space, read/write speed), network (mirrored up/down chart), battery (health, cycle count, temperature, power draw), and top 5 processes by CPU or memory.
-- **Battery details** (click the battery card): power flow (adapter input = computer consumption + power into the battery), computer power history, max capacity / health, cycle count, temperature, voltage, current, and capacity in mAh.
-- **Settings**: refresh interval of 1/2/3/5 seconds, launch at login.
+- **Battery details** (click the battery card): time to full (or to the charge limit) / estimated time remaining, power flow (adapter input = computer consumption + power into the battery), computer power history, max capacity / health, cycle count, temperature, voltage, current, and capacity in mAh. The battery turns yellow in Low Power Mode.
+- **Menu bar battery icon**: the percentage sits inside the battery, with a bolt beside it while charging and a yellow fill in Low Power Mode.
+
+<p align="center"><img src="docs/battery-icons.png" width="380" alt="Menu bar battery icons"></p>
+- **Settings**: refresh interval of 1/2/3/5 seconds, charge limit (match your system setting; used for the charge-time estimate), launch at login.
 
 <p align="center"><img src="docs/battery.png" width="380" alt="Battery details (sample data)"><br><sub>Battery details page (sample data)</sub></p>
 

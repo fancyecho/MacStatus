@@ -50,7 +50,8 @@ struct BatterySnapshot {
     var isCharging = false
     var onAC = false
     var fullyCharged = false
-    var minutesRemaining: Int?
+    var lowPowerMode = false
+    var minutesRemaining: Int?    // 系统给出的估计：充电时是充满时间，用电池时是剩余时间
 
     // 健康
     var health: Int?              // 满充容量 / 设计容量，对应系统设置里的"最大容量"
@@ -329,6 +330,7 @@ enum BatterySampler {
             snapshot.isCharging = info[kIOPSIsChargingKey] as? Bool ?? false
             snapshot.onAC = info[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue
             snapshot.fullyCharged = info[kIOPSIsChargedKey] as? Bool ?? false
+            snapshot.lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
             let minutes = snapshot.isCharging ? info[kIOPSTimeToFullChargeKey] as? Int : info[kIOPSTimeToEmptyKey] as? Int
             if let minutes, minutes > 0 { snapshot.minutesRemaining = minutes }
             if let registry = smartBatteryProperties() {
@@ -464,6 +466,24 @@ enum BatterySampler {
         for name in ["BatteryData", "PowerTelemetryData", "AdapterDetails"] {
             if let nested = dict[name] as? [String: Any] { dump(name, nested) }
         }
+        // 充电器状态和系统电源信息里可能带有充电上限，原样列出（跳过序列号类字段）
+        func dumpAll(_ title: String, _ d: [String: Any]) {
+            print("== \(title) ==")
+            for key in d.keys.sorted() where !key.localizedCaseInsensitiveContains("serial") {
+                if let value = d[key], !(value is [String: Any]), !(value is [Any]) { print("  \(key) = \(value)") }
+            }
+        }
+        if let charger = dict["ChargerData"] as? [String: Any] { dumpAll("ChargerData", charger) }
+        if let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+           let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] {
+            for source in sources {
+                if let info = IOPSGetPowerSourceDescription(blob, source)?.takeUnretainedValue() as? [String: Any] {
+                    dumpAll("IOPowerSources", info)
+                }
+            }
+        }
+        print("== 系统 ==")
+        print("  低电量模式 = \(ProcessInfo.processInfo.isLowPowerModeEnabled)")
     }
 }
 

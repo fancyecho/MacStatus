@@ -50,6 +50,13 @@ enum Fmt {
         return "\(mins) 分钟"
     }
 
+    /// 拆成 (数字, 单位) 便于大小字号排版，例如 [("1", "小时"), ("12", "分")]
+    static func durationParts(_ total: Int) -> [(String, String)] {
+        let hours = total / 60, mins = total % 60
+        if hours == 0 { return [("\(mins)", "分钟")] }
+        return mins == 0 ? [("\(hours)", "小时")] : [("\(hours)", "小时"), ("\(mins)", "分")]
+    }
+
     static func minutes(_ total: Int) -> String {
         total >= 60 ? "\(total / 60):\(String(format: "%02d", total % 60))" : "\(total) 分钟"
     }

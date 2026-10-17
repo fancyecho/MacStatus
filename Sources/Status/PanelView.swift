@@ -90,7 +90,7 @@ struct PanelView: View {
 
             networkCard
             if let battery = monitor.battery {
-                BatterySummaryCard(battery: battery) { prefs.page = .battery }
+                BatterySummaryCard(battery: battery, estimate: monitor.batteryEstimate) { prefs.page = .battery }
             }
             ProcessCard()
         }
@@ -201,6 +201,7 @@ struct PanelView: View {
             }
             .lineLimit(1)
             .minimumScaleFactor(0.85)
+            .frame(height: 14)
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(Ink.tertiary)
             .monospacedDigit()
@@ -340,6 +341,19 @@ private struct SettingsView: View {
                     .labelsHidden()
                     .controlSize(.small)
                     .frame(width: 180)
+                }
+                .frame(height: 24)
+                HStack {
+                    Text("充电上限")
+                        .help("和 系统设置 › 电池 里的充电上限保持一致，用来估算充电时间、判断是否已达上限")
+                    Spacer()
+                    Picker("", selection: $prefs.chargeLimit) {
+                        ForEach([80, 85, 90, 95, 100], id: \.self) { Text("\($0)%").tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .frame(width: 200)
                 }
                 .frame(height: 24)
                 HStack {

@@ -77,6 +77,7 @@ struct Tile<Accessory: View, Content: View>: View {
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(Ink.tertiary)
             }
+            .frame(height: 15)   // 右上角有没有内容都保持同样高度
             content
         }
         .padding(11)

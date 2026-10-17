@@ -32,6 +32,12 @@ enum Snapshot {
                 capture(MenuBarStrip(values: monitor.menuBar.values, prefs: prefs), monitor: monitor, prefs: prefs, dark: dark,
                         to: "\(dir)/menubar-\(dark ? "dark" : "light").png")
             }
+            // 电池图标的几种状态：普通 / 充电 / 低电量 / 低电量模式 / 充满
+            for dark in [false, true] {
+                let icons = batteryIcons(prefs: prefs, dark: dark)
+                capture(IconRow(images: icons), monitor: monitor, prefs: prefs, dark: dark,
+                        to: "\(dir)/battery-icons-\(dark ? "dark" : "light").png")
+            }
             exit(0)
         }
     }
@@ -65,6 +71,14 @@ enum Snapshot {
             after(7.5) {
                 describe("overview")
                 print("heights over 6 ticks: \(heights)")
+                prefs.page = .battery
+            }
+            var batteryHeights: [CGFloat] = []
+            for i in 1...5 {
+                after(7.5 + Double(i) * 1.1) { batteryHeights.append(panel.frame.height) }
+            }
+            after(14) {
+                print("battery page heights: \(batteryHeights)")
                 prefs.page = .settings
                 after(1) {
                     describe("settings")
@@ -137,10 +151,42 @@ private struct MenuBarStrip: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        Image(nsImage: MenuBarIcon.render(values: values, prefs: prefs))
+        Image(nsImage: MenuBarIcon.render(values: values, prefs: prefs, darkMenuBar: scheme == .dark))
             .foregroundStyle(scheme == .dark ? .white : .black)
             .padding(.horizontal, 12)
             .frame(height: 26)
             .background(scheme == .dark ? Color(white: 0.17) : Color(white: 0.95))
+    }
+}
+
+/// 只打开"电池"一项，渲染几种典型状态
+@MainActor
+private func batteryIcons(prefs: Preferences, dark: Bool) -> [NSImage] {
+    let saved = (prefs.showCPU, prefs.showMemory, prefs.showNetwork, prefs.showTemperature, prefs.showGPU, prefs.showBattery)
+    (prefs.showCPU, prefs.showMemory, prefs.showNetwork, prefs.showTemperature, prefs.showGPU, prefs.showBattery) = (false, false, false, false, false, true)
+    defer { (prefs.showCPU, prefs.showMemory, prefs.showNetwork, prefs.showTemperature, prefs.showGPU, prefs.showBattery) = saved }
+    let states: [(Int, Bool, Bool)] = [(78, false, false), (78, true, false), (12, false, false), (45, false, true), (100, false, false)]
+    return states.map { percent, charging, lowPower in
+        var values = MenuBarModel.Values()
+        values.battery = percent
+        values.charging = charging
+        values.lowPower = lowPower
+        return MenuBarIcon.render(values: values, prefs: prefs, darkMenuBar: dark)
+    }
+}
+
+private struct IconRow: View {
+    let images: [NSImage]
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack(spacing: 18) {
+            ForEach(images.indices, id: \.self) { i in
+                Image(nsImage: images[i]).foregroundStyle(scheme == .dark ? .white : .black)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 30)
+        .background(scheme == .dark ? Color(white: 0.17) : Color(white: 0.95))
     }
 }

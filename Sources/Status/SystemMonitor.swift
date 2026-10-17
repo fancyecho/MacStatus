@@ -12,6 +12,8 @@ final class Preferences: ObservableObject {
     @Published var showBattery: Bool { didSet { defaults.set(showBattery, forKey: "showBattery") } }
     @Published var showTemperature: Bool { didSet { defaults.set(showTemperature, forKey: "showTemperature") } }
     @Published var interval: Double { didSet { defaults.set(interval, forKey: "interval") } }
+    /// 和 系统设置 › 电池 里的充电上限保持一致，用于估算充电时间和判断"已达上限"
+    @Published var chargeLimit: Int { didSet { defaults.set(chargeLimit, forKey: "chargeLimit") } }
     @Published var processSort: ProcessSort { didSet { defaults.set(processSort.rawValue, forKey: "processSort") } }
 
     /// 面板当前显示的页面（不持久化）
@@ -24,7 +26,7 @@ final class Preferences: ObservableObject {
     init() {
         defaults.register(defaults: [
             "showCPU": true, "showMemory": true, "showGPU": false,
-            "showNetwork": true, "showBattery": false, "showTemperature": true, "interval": 2.0,
+            "showNetwork": true, "showBattery": false, "showTemperature": true, "interval": 2.0, "chargeLimit": 100,
         ])
         showCPU = defaults.bool(forKey: "showCPU")
         showMemory = defaults.bool(forKey: "showMemory")
@@ -33,6 +35,7 @@ final class Preferences: ObservableObject {
         showBattery = defaults.bool(forKey: "showBattery")
         showTemperature = defaults.bool(forKey: "showTemperature")
         interval = defaults.double(forKey: "interval")
+        chargeLimit = defaults.integer(forKey: "chargeLimit")
         processSort = ProcessSort(rawValue: defaults.string(forKey: "processSort") ?? "") ?? .cpu
     }
 
@@ -45,6 +48,21 @@ final class Preferences: ObservableObject {
     }
 }
 
+struct BatteryEstimate: Equatable {
+    enum Kind: Equatable {
+        case toFull            // 充电中，目标 100%
+        case toLimit(Int)      // 充电中，目标为设置的充电上限
+        case remaining         // 使用电池，预计还能用多久
+        case atLimit(Int)      // 已达充电上限，停止充电
+        case full              // 已充满
+        case paused            // 接着电源但没有充电（例如系统的优化充电暂停）
+    }
+
+    var kind: Kind
+    var minutes: Int?
+    var fromSystem = false
+}
+
 /// 菜单栏只用到这几个数值；只有显示内容真正变化时才发布，避免无谓重绘
 @MainActor
 final class MenuBarModel: ObservableObject {
@@ -55,6 +73,7 @@ final class MenuBarModel: ObservableObject {
         var up = "0B"
         var down = "0B"
         var battery: Int?
+        var lowPower = false
         var temperature: Int?
         var charging = false
     }
@@ -89,6 +108,7 @@ final class SystemMonitor: ObservableObject {
     private(set) var gpuHistory: [Double] = []
     private(set) var downHistory: [Double] = []
     private(set) var upHistory: [Double] = []
+    private(set) var batteryEstimate: BatteryEstimate?
     private(set) var systemPowerHistory: [Double] = []
     private(set) var batteryPowerHistory: [Double] = []
 
@@ -151,6 +171,7 @@ final class SystemMonitor: ObservableObject {
                 Self.push(battery.systemPower ?? 0, to: &systemPowerHistory)
                 Self.push(battery.batteryPower ?? 0, to: &batteryPowerHistory)
             }
+            batteryEstimate = battery.map(estimate)
         }
         if full || panelVisible || prefs.showTemperature || tickCount % 5 == 0 {
             temperature = temperatureSampler.sample()
@@ -175,6 +196,7 @@ final class SystemMonitor: ObservableObject {
             up: Fmt.compactRate(network.up),
             down: Fmt.compactRate(network.down),
             battery: battery?.percent,
+            lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
             temperature: temperature?.cpu.map { Int($0.rounded()) },
             charging: battery?.isCharging ?? false
         ))
@@ -202,9 +224,49 @@ final class SystemMonitor: ObservableObject {
         b.amperage = (b.batteryPower ?? 0) / 12.61
         b.systemPower = system
         b.adapterPower = wide ? system + 18.6 : nil
+        b.lowPowerMode = tickCount % 4 >= 2
+        b.minutesRemaining = nil   // 模拟系统还没给出估计，走自己的推算
         battery = b
         Self.push(system, to: &systemPowerHistory)
         Self.push(b.batteryPower ?? 0, to: &batteryPowerHistory)
+        batteryEstimate = estimate(b)
+    }
+
+    /// 优先用系统的估计；系统还在"计算中"或设置了充电上限时，用最近约一分钟的平均功率推算：
+    /// 剩余时间 = 还需充入（或剩余）的电能 Wh ÷ 平均功率 W
+    private func estimate(_ b: BatterySnapshot) -> BatteryEstimate {
+        let limit = prefs.chargeLimit
+        let recent = batteryPowerHistory.suffix(30)
+        func minutes(_ wattHours: Double, _ rates: [Double]) -> Int? {
+            guard !rates.isEmpty else { return nil }
+            let rate = rates.reduce(0, +) / Double(rates.count)
+            let value = wattHours / rate * 60
+            return value.isFinite && value > 0 && value < 24 * 60 ? Int(value.rounded()) : nil
+        }
+
+        if b.onAC {
+            if b.percent >= limit && !b.isCharging {
+                return BatteryEstimate(kind: limit < 100 ? .atLimit(limit) : .full)
+            }
+            if b.fullyCharged || b.percent >= 100 { return BatteryEstimate(kind: .full) }
+            guard b.isCharging else { return BatteryEstimate(kind: .paused) }
+            let kind: BatteryEstimate.Kind = limit < 100 ? .toLimit(limit) : .toFull
+            if limit >= 100, let system = b.minutesRemaining {
+                return BatteryEstimate(kind: kind, minutes: system, fromSystem: true)
+            }
+            guard let full = b.fullCapacity, let volts = b.voltage else {
+                return BatteryEstimate(kind: kind, minutes: limit >= 100 ? b.minutesRemaining : nil)
+            }
+            let needed = Double(max(limit - b.percent, 0)) / 100 * Double(full) * volts / 1000
+            return BatteryEstimate(kind: kind, minutes: minutes(needed, recent.filter { $0 > 0.3 }))
+        }
+
+        if let system = b.minutesRemaining {
+            return BatteryEstimate(kind: .remaining, minutes: system, fromSystem: true)
+        }
+        guard let volts = b.voltage else { return BatteryEstimate(kind: .remaining) }
+        let mAh = Double(b.currentCapacity ?? (b.fullCapacity ?? 0) * b.percent / 100)
+        return BatteryEstimate(kind: .remaining, minutes: minutes(mAh * volts / 1000, recent.filter { $0 < -0.3 }.map(abs)))
     }
 
     private static func push(_ value: Double, to history: inout [Double]) {
