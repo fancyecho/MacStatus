@@ -87,7 +87,10 @@ enum Snapshot {
                     after(1) {
                         describe("after clicking icon while open")
                         click(at: NSPoint(x: anchor().midX, y: anchor().midY))
-                        after(1) {
+                        for t in [0.1, 0.3, 0.6, 1.2, 2.0] {
+                            after(t) { print("  reopen +\(t)s: y=\(panel.frame.minY) h=\(panel.frame.height) gap=\(anchor().minY - panel.frame.maxY)") }
+                        }
+                        after(2.2) {
                             describe("after clicking icon again")
                             click(at: NSPoint(x: 300, y: 450))
                             after(1) {

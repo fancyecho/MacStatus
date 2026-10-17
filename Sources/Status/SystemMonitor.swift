@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import ServiceManagement
 
 @MainActor
@@ -12,7 +12,7 @@ final class Preferences: ObservableObject {
     @Published var showBattery: Bool { didSet { defaults.set(showBattery, forKey: "showBattery") } }
     @Published var showTemperature: Bool { didSet { defaults.set(showTemperature, forKey: "showTemperature") } }
     @Published var interval: Double { didSet { defaults.set(interval, forKey: "interval") } }
-    /// 和 系统设置 › 电池 里的充电上限保持一致，用于估算充电时间和判断"已达上限"
+    /// 充电上限：0 = 自动（跟随系统的估计）；80–100 = 手动，只用于估算充电时间和显示"已达上限"，不会改变实际充电
     @Published var chargeLimit: Int { didSet { defaults.set(chargeLimit, forKey: "chargeLimit") } }
     @Published var processSort: ProcessSort { didSet { defaults.set(processSort.rawValue, forKey: "processSort") } }
 
@@ -26,7 +26,7 @@ final class Preferences: ObservableObject {
     init() {
         defaults.register(defaults: [
             "showCPU": true, "showMemory": true, "showGPU": false,
-            "showNetwork": true, "showBattery": false, "showTemperature": true, "interval": 2.0, "chargeLimit": 100,
+            "showNetwork": true, "showBattery": false, "showTemperature": true, "interval": 2.0, "chargeLimit": 0,
         ])
         showCPU = defaults.bool(forKey: "showCPU")
         showMemory = defaults.bool(forKey: "showMemory")
@@ -43,9 +43,18 @@ final class Preferences: ObservableObject {
         get { SMAppService.mainApp.status == .enabled }
         set {
             objectWillChange.send()
-            if newValue { try? SMAppService.mainApp.register() } else { try? SMAppService.mainApp.unregister() }
+            do {
+                if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+                loginItemError = nil
+            } catch {
+                loginItemError = "设置失败：\(error.localizedDescription)"
+            }
         }
     }
+
+    /// 系统要求用户在"登录项"里手动允许
+    var loginItemNeedsApproval: Bool { SMAppService.mainApp.status == .requiresApproval }
+    @Published var loginItemError: String?
 }
 
 struct BatteryEstimate: Equatable {
@@ -101,6 +110,8 @@ final class SystemMonitor: ObservableObject {
     private(set) var temperature: TemperatureSnapshot?
     private(set) var topByCPU: [ProcessEntry] = []
     private(set) var topByMemory: [ProcessEntry] = []
+    private(set) var topByEnergy: [AppEnergy] = []
+    private(set) var energyAvailable = false
     private(set) var uptime: TimeInterval = 0
     private(set) var loadAverage: [Double] = []
 
@@ -110,15 +121,27 @@ final class SystemMonitor: ObservableObject {
     private(set) var upHistory: [Double] = []
     private(set) var batteryEstimate: BatteryEstimate?
     private(set) var systemPowerHistory: [Double] = []
+    /// 估算充电 / 剩余时间用的近期电池功率（带时间戳，面板关着时也会记录）
+    private var powerSamples: [(time: TimeInterval, watts: Double)] = []
+    private var lastPowerPush: TimeInterval = 0
+    private var lastGPUPush: TimeInterval = 0
     private(set) var batteryPowerHistory: [Double] = []
 
     var panelVisible = false {
         didSet {
             guard panelVisible != oldValue else { return }
             if panelVisible {
-                // 打开面板时立即刷新进程列表等低频数据
+                // 面板关闭时进程、磁盘等不采样；打开时立即刷新一次，
+                // 再在 1 秒后补一次，让进程占用、读写速度反映的是"现在"而不是关闭期间的平均
                 tick(full: true)
                 objectWillChange.send()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self, self.panelVisible else { return }
+                        self.tick(full: true)
+                        self.objectWillChange.send()
+                    }
+                }
             }
         }
     }
@@ -144,36 +167,41 @@ final class SystemMonitor: ObservableObject {
                 guard let self else { return }
                 self.tick()
                 if self.panelVisible { self.objectWillChange.send() }
-                try? await Task.sleep(for: .seconds(self.prefs.interval))
+                // 允许系统把这次唤醒和别的定时器合并，减少 CPU 被单独唤醒的次数
+                let interval = self.prefs.interval
+                try? await Task.sleep(for: .seconds(interval), tolerance: .seconds(interval * 0.15))
             }
         }
     }
 
     private func tick(full: Bool = false) {
         let first = tickCount == 0
+        let active = full || panelVisible
+        // CPU、内存、网速很便宜，且历史曲线需要连续数据，始终采样
         cpu = cpuSampler.sample()
         memory = MemorySampler.sample()
-        gpu = GPUSampler.sample()
         network = networkSampler.sample()
 
-        // 进程、磁盘、电池只在面板里展示，面板关闭时降低频率
-        let detailed = full || panelVisible || tickCount % 5 == 0
-        if detailed {
+        // 下面这些读 IORegistry / 遍历所有进程，比较贵：面板关闭时只采菜单栏用得到的
+        if active || prefs.showGPU {
+            gpu = GPUSampler.sample()
+        }
+        if active {
             disk = diskSampler.sample()
-            let processes = processSampler.sample()
+            let processes = processSampler.sample(groupByApp: prefs.page == .battery)
             topByCPU = processes.byCPU
             topByMemory = processes.byMemory
+            topByEnergy = processes.byEnergy
+            energyAvailable = processes.energyAvailable
         }
-        // 电池详情要看实时功率，面板打开时每次都采样
-        if full || panelVisible || tickCount % 5 == 0 {
+        // 电池：面板打开时每次都采（详情页看实时功率），关闭时每 5 次采一次（菜单栏电量、充电时间估算）
+        if active || tickCount % 5 == 0 {
             battery = BatterySampler.sample()
-            if !full, let battery {
-                Self.push(battery.systemPower ?? 0, to: &systemPowerHistory)
-                Self.push(battery.batteryPower ?? 0, to: &batteryPowerHistory)
-            }
+            if let battery { recordPower(battery, chart: active && !full) }
             batteryEstimate = battery.map(estimate)
         }
-        if full || panelVisible || prefs.showTemperature || tickCount % 5 == 0 {
+        // 温度：菜单栏显示时每两次采一次就够了
+        if active || (prefs.showTemperature && tickCount % 2 == 0) {
             temperature = temperatureSampler.sample()
         }
         uptime = SystemInfo.uptime
@@ -183,7 +211,13 @@ final class SystemMonitor: ObservableObject {
         // 第一次采样没有差值，不计入历史；额外的刷新也不计入，保持时间轴均匀
         if !first && !full {
             Self.push(cpu.usage, to: &cpuHistory)
-            if let gpu { Self.push(gpu, to: &gpuHistory) }
+            if let gpu {
+                // 面板关闭期间没有采 GPU 时，别把旧曲线和新数据接在一起
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - lastGPUPush > prefs.interval * 3 { gpuHistory.removeAll() }
+                lastGPUPush = now
+                Self.push(gpu, to: &gpuHistory)
+            }
             Self.push(network.down, to: &downHistory)
             Self.push(network.up, to: &upHistory)
         }
@@ -227,16 +261,26 @@ final class SystemMonitor: ObservableObject {
         b.lowPowerMode = tickCount % 4 >= 2
         b.minutesRemaining = nil   // 模拟系统还没给出估计，走自己的推算
         battery = b
-        Self.push(system, to: &systemPowerHistory)
-        Self.push(b.batteryPower ?? 0, to: &batteryPowerHistory)
+        recordPower(b, chart: true)
         batteryEstimate = estimate(b)
+        energyAvailable = true
+        let apps: [(String, String, Double)] = [
+            ("/System/Applications/Music.app", "音乐", 2.4), ("/System/Library/CoreServices/Finder.app", "访达", 1.1),
+            ("/System/Applications/Mail.app", "邮件", 0.62), ("/System/Applications/Photos.app", "照片", 0.35),
+            ("/System/Applications/Notes.app", "备忘录", 0.08),
+        ]
+        topByEnergy = apps.map { path, name, watts in
+            AppEnergy(id: path, name: name, icon: NSWorkspace.shared.icon(forFile: path),
+                      watts: watts * Double.random(in: 0.85...1.15), cpu: watts * 9)
+        }
     }
 
     /// 优先用系统的估计；系统还在"计算中"或设置了充电上限时，用最近约一分钟的平均功率推算：
     /// 剩余时间 = 还需充入（或剩余）的电能 Wh ÷ 平均功率 W
     private func estimate(_ b: BatterySnapshot) -> BatteryEstimate {
-        let limit = prefs.chargeLimit
-        let recent = batteryPowerHistory.suffix(30)
+        // 0 = 自动：跟随系统（系统的估计已考虑它自己的充电上限）
+        let manualLimit = prefs.chargeLimit > 0 ? prefs.chargeLimit : nil
+        let recent = powerSamples.map(\.watts)
         func minutes(_ wattHours: Double, _ rates: [Double]) -> Int? {
             guard !rates.isEmpty else { return nil }
             let rate = rates.reduce(0, +) / Double(rates.count)
@@ -245,19 +289,22 @@ final class SystemMonitor: ObservableObject {
         }
 
         if b.onAC {
-            if b.percent >= limit && !b.isCharging {
-                return BatteryEstimate(kind: limit < 100 ? .atLimit(limit) : .full)
-            }
             if b.fullyCharged || b.percent >= 100 { return BatteryEstimate(kind: .full) }
+            if let limit = manualLimit, limit < 100, b.percent >= limit, !b.isCharging {
+                return BatteryEstimate(kind: .atLimit(limit))
+            }
+            // 接着电源却没在充：多半是系统的充电上限或优化充电让它暂停了
             guard b.isCharging else { return BatteryEstimate(kind: .paused) }
-            let kind: BatteryEstimate.Kind = limit < 100 ? .toLimit(limit) : .toFull
-            if limit >= 100, let system = b.minutesRemaining {
+            // 已超过手动设置的上限但系统仍在充（两边设置不一致）：按充满估算，避免一直"估算中"
+            let target = manualLimit.map { b.percent < $0 ? $0 : 100 } ?? 100
+            let kind: BatteryEstimate.Kind = target < 100 ? .toLimit(target) : .toFull
+            if target >= 100, let system = b.minutesRemaining {
                 return BatteryEstimate(kind: kind, minutes: system, fromSystem: true)
             }
             guard let full = b.fullCapacity, let volts = b.voltage else {
-                return BatteryEstimate(kind: kind, minutes: limit >= 100 ? b.minutesRemaining : nil)
+                return BatteryEstimate(kind: kind, minutes: target >= 100 ? b.minutesRemaining : nil)
             }
-            let needed = Double(max(limit - b.percent, 0)) / 100 * Double(full) * volts / 1000
+            let needed = Double(max(target - b.percent, 0)) / 100 * Double(full) * volts / 1000
             return BatteryEstimate(kind: kind, minutes: minutes(needed, recent.filter { $0 > 0.3 }))
         }
 
@@ -267,6 +314,24 @@ final class SystemMonitor: ObservableObject {
         guard let volts = b.voltage else { return BatteryEstimate(kind: .remaining) }
         let mAh = Double(b.currentCapacity ?? (b.fullCapacity ?? 0) * b.percent / 100)
         return BatteryEstimate(kind: .remaining, minutes: minutes(mAh * volts / 1000, recent.filter { $0 < -0.3 }.map(abs)))
+    }
+
+    /// 图表只在面板打开时记录，保证点与点之间间隔一致；离上次记录太久（面板关过）就从头开始，
+    /// 避免把很久以前的数据接在一起。估算用的近期功率单独按时间窗口保存
+    private func recordPower(_ b: BatterySnapshot, chart: Bool) {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let watts = b.batteryPower {
+            powerSamples.append((now, watts))
+            powerSamples.removeAll { now - $0.time > 90 }
+        }
+        guard chart else { return }
+        if now - lastPowerPush > prefs.interval * 3 {
+            systemPowerHistory.removeAll()
+            batteryPowerHistory.removeAll()
+        }
+        lastPowerPush = now
+        Self.push(b.systemPower ?? 0, to: &systemPowerHistory)
+        Self.push(b.batteryPower ?? 0, to: &batteryPowerHistory)
     }
 
     private static func push(_ value: Double, to history: inout [Double]) {

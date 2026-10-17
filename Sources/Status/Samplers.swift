@@ -270,17 +270,38 @@ final class DiskSampler {
 
     private var capacity = DiskSnapshot()
     private var capacityTime: TimeInterval = -.infinity
+    private var capacityLoading = false
 
     func sample() -> DiskSnapshot {
         let now = ProcessInfo.processInfo.systemUptime
-        // 查询可用空间很慢，30 秒刷新一次就够了
-        if now - capacityTime > 30 {
+        // 查询可用空间很慢（可能要几百毫秒），放到后台线程，30 秒刷新一次；
+        // 结果回到主线程后在下一次采样时生效，避免打开面板时卡住动画
+        if now - capacityTime > 30, !capacityLoading {
+            capacityLoading = true
+            let first = capacityTime == -.infinity
             capacityTime = now
-            let keys: Set<URLResourceKey> = [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey, .volumeLocalizedNameKey]
-            if let values = try? URL(fileURLWithPath: "/").resourceValues(forKeys: keys) {
-                capacity.total = Int64(values.volumeTotalCapacity ?? 0)
-                capacity.free = values.volumeAvailableCapacityForImportantUsage ?? 0
-                capacity.name = values.volumeLocalizedName ?? capacity.name
+            let load = { () -> DiskSnapshot? in
+                let keys: Set<URLResourceKey> = [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey, .volumeLocalizedNameKey]
+                guard let values = try? URL(fileURLWithPath: "/").resourceValues(forKeys: keys) else { return nil }
+                var result = DiskSnapshot()
+                result.total = Int64(values.volumeTotalCapacity ?? 0)
+                result.free = values.volumeAvailableCapacityForImportantUsage ?? 0
+                result.name = values.volumeLocalizedName ?? result.name
+                return result
+            }
+            if first {
+                // 第一次同步读取，保证一启动就有数据
+                if let result = load() { capacity = result }
+                capacityLoading = false
+            } else {
+                DispatchQueue.global(qos: .utility).async { [weak self] in
+                    let result = load()
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        if let result { self.capacity = result }
+                        self.capacityLoading = false
+                    }
+                }
             }
         }
 
@@ -489,58 +510,146 @@ enum BatterySampler {
 
 // MARK: - Processes
 
+/// 按应用汇总的耗电（Chrome 的各个 Helper 进程都算到 Chrome 头上）
+struct AppEnergy: Identifiable {
+    let id: String
+    let name: String
+    let icon: NSImage
+    let watts: Double      // 能耗计数可用时的平均功率（W）
+    let cpu: Double        // 占用的 CPU（100% = 一个核心）
+}
+
+struct ProcessSample {
+    var byCPU: [ProcessEntry] = []
+    var byMemory: [ProcessEntry] = []
+    var byEnergy: [AppEnergy] = []
+    /// 系统是否提供了每个进程的能耗计数（虚拟机、Intel 机器上没有，退回按 CPU 时间排序）
+    var energyAvailable = false
+}
+
 final class ProcessSampler {
-    private var previous: [pid_t: UInt64] = [:]
+    private struct Counters {
+        var cpuTime: UInt64
+        var energy: UInt64
+    }
+
+    private var previous: [pid_t: Counters] = [:]
     private var lastTime: UInt64 = 0
     private var identities: [pid_t: (name: String, icon: NSImage)] = [:]
+    private var paths: [pid_t: String] = [:]
+    private var groups: [String: (name: String, icon: NSImage)] = [:]
     private static let genericIcon = NSWorkspace.shared.icon(for: .unixExecutable)
+    private static let timebase: Double = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return Double(info.numer) / Double(info.denom)
+    }()
 
-    func sample(limit: Int = 5) -> (byCPU: [ProcessEntry], byMemory: [ProcessEntry]) {
+    /// - Parameter groupByApp: 是否按应用汇总耗电（只在电池详情页需要，平时省掉路径查询）
+    func sample(limit: Int = 5, groupByApp: Bool = false) -> ProcessSample {
         let capacity = Int(proc_listallpids(nil, 0)) + 32
         var pids = [pid_t](repeating: 0, count: capacity)
         let count = Int(proc_listallpids(&pids, Int32(capacity * MemoryLayout<pid_t>.size)))
-        guard count > 0 else { return ([], []) }
+        guard count > 0 else { return ProcessSample() }
 
         let now = mach_absolute_time()
         let elapsed = lastTime == 0 ? 0 : Double(now - lastTime)
-        var current: [pid_t: UInt64] = [:]
-        var rows: [(pid: pid_t, cpu: Double, memory: UInt64)] = []
+        let elapsedSeconds = elapsed * Self.timebase / 1e9
+        var current: [pid_t: Counters] = [:]
+        var rows: [(pid: pid_t, cpu: Double, memory: UInt64, watts: Double)] = []
 
         for pid in pids.prefix(count) where pid > 0 {
-            var info = rusage_info_v4()
+            var info = rusage_info_v6()
             let ok = withUnsafeMutablePointer(to: &info) {
                 $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
-                    proc_pid_rusage(pid, RUSAGE_INFO_V4, $0)
+                    proc_pid_rusage(pid, RUSAGE_INFO_V6, $0)
                 }
             }
             guard ok == 0 else { continue }
-            // 两者都是 mach 时间单位，直接相除即可
-            let time = info.ri_user_time + info.ri_system_time
-            current[pid] = time
-            var cpu = 0.0
-            if elapsed > 0, let prev = previous[pid], time >= prev {
-                cpu = Double(time - prev) / elapsed * 100
+            // CPU 时间和 mach_absolute_time 都是 mach 时间单位，直接相除即可；能耗单位是纳焦
+            let counters = Counters(cpuTime: info.ri_user_time + info.ri_system_time, energy: info.ri_energy_nj)
+            current[pid] = counters
+            var cpu = 0.0, watts = 0.0
+            if elapsed > 0, let prev = previous[pid] {
+                if counters.cpuTime >= prev.cpuTime { cpu = Double(counters.cpuTime - prev.cpuTime) / elapsed * 100 }
+                if counters.energy >= prev.energy, elapsedSeconds > 0 {
+                    watts = Double(counters.energy - prev.energy) / 1e9 / elapsedSeconds
+                }
             }
-            rows.append((pid, cpu, info.ri_phys_footprint))
+            rows.append((pid, cpu, info.ri_phys_footprint, watts))
         }
         previous = current
         lastTime = now
         identities = identities.filter { current[$0.key] != nil }
+        paths = paths.filter { current[$0.key] != nil }
 
-        func entries(_ sorted: some Sequence<(pid: pid_t, cpu: Double, memory: UInt64)>) -> [ProcessEntry] {
+        func entries(_ sorted: some Sequence<(pid: pid_t, cpu: Double, memory: UInt64, watts: Double)>) -> [ProcessEntry] {
             sorted.prefix(limit).map { row in
                 let identity = identity(for: row.pid)
                 return ProcessEntry(id: row.pid, name: identity.name, icon: identity.icon, cpu: row.cpu, memory: row.memory)
             }
         }
-        return (entries(rows.sorted { $0.cpu > $1.cpu }), entries(rows.sorted { $0.memory > $1.memory }))
+        var result = ProcessSample(byCPU: entries(rows.sorted { $0.cpu > $1.cpu }),
+                                   byMemory: entries(rows.sorted { $0.memory > $1.memory }))
+
+        if groupByApp, elapsed > 0 {
+            result.energyAvailable = rows.contains { $0.watts > 0 }
+            var totals: [String: (watts: Double, cpu: Double)] = [:]
+            for row in rows where row.cpu > 0 || row.watts > 0 {
+                let key = groupKey(for: row.pid)
+                totals[key, default: (0, 0)].watts += row.watts
+                totals[key, default: (0, 0)].cpu += row.cpu
+            }
+            let ranked = totals.sorted {
+                result.energyAvailable ? $0.value.watts > $1.value.watts : $0.value.cpu > $1.value.cpu
+            }
+            result.byEnergy = ranked.prefix(limit).map { key, value in
+                let group = groupIdentity(for: key)
+                return AppEnergy(id: key, name: group.name, icon: group.icon, watts: value.watts, cpu: value.cpu)
+            }
+        }
+        return result
+    }
+
+    private func path(for pid: pid_t) -> String {
+        if let cached = paths[pid] { return cached }
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+        let path = proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 ? String(cString: buffer) : ""
+        paths[pid] = path
+        return path
+    }
+
+    /// 最外层的 .app 作为分组（Helper 进程归到主应用）；不在 .app 里的按可执行文件名分组
+    private func groupKey(for pid: pid_t) -> String {
+        let path = path(for: pid)
+        if let range = path.range(of: ".app/") {
+            return String(path[..<range.lowerBound]) + ".app"
+        }
+        if !path.isEmpty { return path }
+        var short = [CChar](repeating: 0, count: 64)
+        proc_name(pid, &short, UInt32(short.count))
+        return "proc:" + String(cString: short)
+    }
+
+    private func groupIdentity(for key: String) -> (name: String, icon: NSImage) {
+        if let cached = groups[key] { return cached }
+        let identity: (String, NSImage)
+        if key.hasSuffix(".app") {
+            identity = (FileManager.default.displayName(atPath: key).replacingOccurrences(of: ".app", with: ""),
+                        NSWorkspace.shared.icon(forFile: key))
+        } else if key.hasPrefix("proc:") {
+            identity = (String(key.dropFirst(5)), Self.genericIcon)
+        } else {
+            identity = ((key as NSString).lastPathComponent, Self.genericIcon)
+        }
+        groups[key] = identity
+        return identity
     }
 
     private func identity(for pid: pid_t) -> (name: String, icon: NSImage) {
         if let cached = identities[pid] { return cached }
 
-        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
-        let path = proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 ? String(cString: buffer) : ""
+        let path = path(for: pid)
         let app = NSRunningApplication(processIdentifier: pid)
 
         var name = app?.localizedName ?? (path as NSString).lastPathComponent

@@ -1,8 +1,10 @@
+import ServiceManagement
 import SwiftUI
 
 struct PanelView: View {
     @EnvironmentObject private var monitor: SystemMonitor
     @EnvironmentObject private var prefs: Preferences
+    @ObservedObject private var updater = UpdateChecker.shared
 
     var body: some View {
         VStack(spacing: 8) {
@@ -62,6 +64,15 @@ struct PanelView: View {
                 Label("活动监视器", systemImage: "arrow.up.forward.app")
             }
             Spacer()
+            if let release = updater.availableRelease {
+                Button { updater.downloadUpdate() } label: {
+                    Label(updater.state == .downloading(release) ? "正在下载…" : "新版本 \(release.version)",
+                          systemImage: "arrow.down.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                }
+                .disabled(updater.state == .downloading(release))
+                .help("下载新版本到“下载”文件夹并打开，把 Status 拖进“应用程序”替换即可")
+            }
             Button { NSApp.terminate(nil) } label: {
                 Text("退出")
             }
@@ -306,6 +317,8 @@ private struct ProcessCard: View {
                     .help("\(row.name)\nPID \(row.id) · CPU \(String(format: "%.1f%%", row.cpu)) · 内存 \(Fmt.memory(row.memory))")
                 }
             }
+            // 固定 5 行的高度：刚打开、进程还没采到时卡片也不会变矮
+            .frame(height: 5 * 20 + 4 * 3, alignment: .top)
         }
         .padding(10)
         .card()
@@ -316,6 +329,7 @@ private struct ProcessCard: View {
 
 private struct SettingsView: View {
     @EnvironmentObject private var prefs: Preferences
+    @ObservedObject private var updater = UpdateChecker.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -343,19 +357,26 @@ private struct SettingsView: View {
                     .frame(width: 180)
                 }
                 .frame(height: 24)
-                HStack {
-                    Text("充电上限")
-                        .help("和 系统设置 › 电池 里的充电上限保持一致，用来估算充电时间、判断是否已达上限")
-                    Spacer()
-                    Picker("", selection: $prefs.chargeLimit) {
-                        ForEach([80, 85, 90, 95, 100], id: \.self) { Text("\($0)%").tag($0) }
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text("充电上限")
+                        Spacer()
+                        Picker("", selection: $prefs.chargeLimit) {
+                            Text("自动").tag(0)
+                            ForEach([80, 85, 90, 95, 100], id: \.self) { Text("\($0)").tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .frame(width: 214)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .frame(width: 200)
+                    .frame(height: 24)
+                    Text("只用于估算充电时间，不会改变实际充电。实际上限请在 系统设置 › 电池 中设置；“自动”使用系统自己的估计。")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Ink.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 4)
                 }
-                .frame(height: 24)
                 HStack {
                     Text("登录时启动")
                     Spacer()
@@ -365,7 +386,78 @@ private struct SettingsView: View {
                         .labelsHidden()
                 }
                 .frame(height: 24)
+                if prefs.loginItemNeedsApproval || prefs.loginItemError != nil {
+                    HStack(spacing: 6) {
+                        Text(prefs.loginItemError ?? "需要在 系统设置 › 通用 › 登录项 中允许 Status")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        Button("打开") { SMAppService.openSystemSettingsLoginItems() }
+                            .controlSize(.small)
+                    }
+                    .padding(.bottom, 4)
+                }
             }
+            about
+        }
+    }
+
+    private var about: some View {
+        section("关于") {
+            HStack {
+                Text("Status \(updater.currentVersion)")
+                Spacer()
+                updateStatus
+            }
+            .frame(height: 24)
+            HStack {
+                Text("自动检查更新")
+                Spacer()
+                Toggle("", isOn: Binding(get: { updater.autoCheck }, set: { updater.autoCheck = $0 }))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+            }
+            .frame(height: 24)
+            HStack {
+                Link(destination: UpdateChecker.repositoryURL) {
+                    Label("项目主页", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+                Spacer()
+                Link(destination: UpdateChecker.authorURL) {
+                    Label("@fancyecho", systemImage: "person.crop.circle")
+                }
+            }
+            .font(.system(size: 11.5))
+            .foregroundStyle(Ink.secondary)
+            .frame(height: 24)
+            .help("在 GitHub 上查看")
+        }
+    }
+
+    @ViewBuilder
+    private var updateStatus: some View {
+        switch updater.state {
+        case .checking:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text("正在检查…").foregroundStyle(Ink.secondary)
+            }
+        case .upToDate:
+            Label("已是最新版本", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(Palette.battery)
+        case .available(let release), .downloading(let release):
+            Button("下载 \(release.version)") { updater.downloadUpdate() }
+                .controlSize(.small)
+                .disabled(updater.state == .downloading(release))
+        case .failed(let message):
+            HStack(spacing: 6) {
+                Text(message).foregroundStyle(.orange)
+                Button("重试") { updater.check() }.controlSize(.small)
+            }
+        case .idle:
+            Button("检查更新") { updater.check() }.controlSize(.small)
         }
     }
 

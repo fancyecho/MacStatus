@@ -8,16 +8,22 @@ private enum PowerPalette {
     static let adapter = Color(red: 1.0, green: 0.74, blue: 0.25)
 }
 
-/// 状态（不含时间），例如"充电中 · 低电量模式"
+/// 用于概览卡片的状态（不含时间），例如"已暂停充电"
 private func batteryState(_ b: BatterySnapshot, _ e: BatteryEstimate?) -> String {
     let state: String = switch e?.kind {
     case .toFull, .toLimit: "充电中"
     case .atLimit(let limit): "已达充电上限 \(limit)%"
     case .full: "已充满"
-    case .paused: "已接通电源 · 暂停充电"
+    case .paused: "已暂停充电"
     case .remaining, nil: b.onAC ? "已接通电源" : "使用电池"
     }
     return b.lowPowerMode ? state + " · 低电量模式" : state
+}
+
+/// 详情页左侧：只说电从哪来，例如"已接通电源 · 低电量模式"
+private func powerSource(_ b: BatterySnapshot) -> String {
+    let source = b.onAC ? (b.isCharging ? "正在充电" : "已接通电源") : "使用电池"
+    return b.lowPowerMode ? source + " · 低电量模式" : source
 }
 
 /// 概览卡片用的一行摘要，例如"充电中 · 1:12 后到 90%"
@@ -129,6 +135,7 @@ struct BatteryDetailView: View {
                 PowerFlowCard(battery: battery, estimate: monitor.batteryEstimate,
                               systemHistory: monitor.systemPowerHistory,
                               batteryHistory: monitor.batteryPowerHistory)
+                EnergyAppsCard(apps: monitor.topByEnergy, energyAvailable: monitor.energyAvailable)
                 HealthCard(battery: battery)
             }
         } else {
@@ -145,7 +152,7 @@ struct BatteryDetailView: View {
             BatteryGlyph(percent: b.percent, charging: b.isCharging, lowPower: b.lowPowerMode, width: 46)
             VStack(alignment: .leading, spacing: 2) {
                 BigNumber(value: "\(b.percent)", unit: "%", size: 28)
-                Text(batteryState(b, e))
+                Text(powerSource(b))
                     .font(.system(size: 11.5))
                     .foregroundStyle(b.lowPowerMode ? Color(red: 0.85, green: 0.62, blue: 0.0) : Ink.secondary)
                     .lineLimit(1)
@@ -160,50 +167,81 @@ struct BatteryDetailView: View {
     }
 }
 
-/// 右侧的时间：大号数字 + 说明，例如"1 小时 12 分 / 充到 90% 还需"
+/// 右侧的充电进度：时间（大号数字 + 说明），或暂停 / 已达上限 / 已充满
 private struct TimeEstimateView: View {
     let estimate: BatteryEstimate?
 
     var body: some View {
-        if let e = estimate, let caption = caption(e.kind) {
+        if let e = estimate {
             VStack(alignment: .trailing, spacing: 2) {
-                if let minutes = e.minutes {
-                    HStack(alignment: .firstTextBaseline, spacing: 1) {
-                        ForEach(Array(Fmt.durationParts(minutes).enumerated()), id: \.offset) { _, part in
-                            Text(part.0)
-                                .font(.system(size: 20, weight: .semibold, design: .rounded))
-                                .monospacedDigit()
-                            Text(part.1)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(Ink.secondary)
-                                .padding(.trailing, 2)
-                        }
-                    }
-                } else {
-                    Text("估算中…")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Ink.secondary)
-                }
-                Text(caption)
+                headline(e)
+                Text(caption(e.kind))
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(Ink.tertiary)
+                    .lineLimit(1)
             }
-            .help(e.fromSystem ? "系统给出的估计" : "按最近约一分钟的平均功率估算，充电接近上限时会变慢，实际可能稍长")
+            .help(help(e))
         }
     }
 
-    private func caption(_ kind: BatteryEstimate.Kind) -> String? {
+    @ViewBuilder
+    private func headline(_ e: BatteryEstimate) -> some View {
+        switch e.kind {
+        case .toFull, .toLimit, .remaining:
+            if let minutes = e.minutes {
+                HStack(alignment: .firstTextBaseline, spacing: 1) {
+                    ForEach(Array(Fmt.durationParts(minutes).enumerated()), id: \.offset) { _, part in
+                        Text(part.0)
+                            .font(.system(size: 20, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                        Text(part.1)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Ink.secondary)
+                            .padding(.trailing, 2)
+                    }
+                }
+            } else {
+                status("估算中…", symbol: "hourglass")
+            }
+        case .paused: status("已暂停充电", symbol: "pause.circle.fill")
+        case .atLimit: status("已达上限", symbol: "checkmark.circle.fill")
+        case .full: status("已充满", symbol: "checkmark.circle.fill")
+        }
+    }
+
+    private func status(_ text: String, symbol: String) -> some View {
+        Label(text, systemImage: symbol)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(symbol == "hourglass" ? Ink.secondary : .primary)
+            .frame(height: 24)
+    }
+
+    private func caption(_ kind: BatteryEstimate.Kind) -> String {
         switch kind {
         case .toFull: "充满还需"
         case .toLimit(let limit): "充到 \(limit)% 还需"
         case .remaining: "预计还能使用"
-        default: nil
+        case .paused: "可能已达系统充电上限"
+        case .atLimit(let limit): "充电上限 \(limit)%"
+        case .full: "电源直接为电脑供电"
+        }
+    }
+
+    private func help(_ e: BatteryEstimate) -> String {
+        switch e.kind {
+        case .paused:
+            "接着电源但没有充电。通常是达到了 系统设置 › 电池 里的充电上限，或者系统的「优化电池充电」暂时停在了 80%。"
+        case .toFull, .toLimit, .remaining:
+            e.fromSystem ? "系统给出的估计" : "按最近约一分钟的平均功率估算，接近充满时充电会变慢，实际可能稍长"
+        default:
+            ""
         }
     }
 }
 
 /// 输入 = 系统 + 电池：用三栏数字 + 一根分段条说明电从哪来、到哪去
 private struct PowerFlowCard: View {
+    @EnvironmentObject private var prefs: Preferences
     let battery: BatterySnapshot
     let estimate: BatteryEstimate?
     let systemHistory: [Double]
@@ -228,12 +266,6 @@ private struct PowerFlowCard: View {
             flowBar
                 .frame(height: 8)
                 .padding(.vertical, 2)
-            Text(caption)
-                .font(.system(size: 11))
-                .foregroundStyle(Ink.secondary)
-                .lineLimit(2)
-                // 固定两行高度：说明文字一行或两行时卡片都不跳
-                .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .topLeading)
             VStack(alignment: .leading, spacing: 3) {
                 Legend(color: PowerPalette.system, label: "电脑消耗 · 最近 \(historyMinutes) 分钟",
                        value: systemHistory.max().map { String(format: "峰值 %.1f W", $0) } ?? "")
@@ -244,28 +276,14 @@ private struct PowerFlowCard: View {
         }
     }
 
+    private var interval: Double { prefs.interval }
+
     private var batteryColumnTitle: String {
         guard let power = battery.batteryPower, abs(power) >= 0.05 else { return "电池" }
         return power > 0 ? "充入电池" : "电池放电"
     }
 
-    private var historyMinutes: Int { max(1, systemHistory.count * 2 / 60) }
-
-    private var caption: String {
-        let b = battery
-        let system = wattText(b.systemPower)
-        let charge = max(b.batteryPower ?? 0, 0)
-        if b.onAC {
-            if case .atLimit(let limit) = estimate?.kind {
-                return "已达到充电上限 \(limit)%，电源只为电脑供电（\(system)）。"
-            }
-            if charge >= 0.05 {
-                return "电源输入 \(wattText(b.adapterPower))，其中 \(system) 供电脑运行，\(wattText(charge)) 充入电池。"
-            }
-            return "电池暂未充电，电源输入全部用于电脑运行（\(system)）。"
-        }
-        return "未接电源，电池正以 \(wattText(b.batteryPower.map(abs))) 为电脑供电。"
-    }
+    private var historyMinutes: Int { max(1, Int((Double(systemHistory.count) * interval / 60).rounded())) }
 
     /// 接电源：整根条 = 输入，分成电脑消耗和充入电池两段；用电池：整根条都是电脑消耗
     private var flowBar: some View {
@@ -379,5 +397,67 @@ private struct HealthCard: View {
                 .frame(height: 16)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Energy apps
+
+/// 耗电最多的应用：按系统提供的每进程能耗计数（CPU 部分）汇总到应用；没有能耗计数时按 CPU 占用排序
+private struct EnergyAppsCard: View {
+    let apps: [AppEnergy]
+    let energyAvailable: Bool
+
+    private static let rows = 5
+
+    var body: some View {
+        Tile(title: "耗电最多的应用", symbol: "flame.fill", tint: Color(red: 1.0, green: 0.55, blue: 0.25)) {
+            Text(energyAvailable ? "CPU 能耗" : "按 CPU 占用")
+                .help(energyAvailable
+                      ? "根据系统记录的每个进程 CPU 能耗估算，Helper 进程计入所属应用；不含屏幕、GPU、无线等耗电，也看不到其他用户（如系统服务）的进程"
+                      : "这台 Mac 没有提供每进程能耗数据（例如虚拟机或 Intel 机型），改为按 CPU 占用排序")
+        } content: {
+            let top = max(apps.map(value).max() ?? 0, 0.0001)
+            VStack(spacing: 4) {
+                ForEach(0..<Self.rows, id: \.self) { index in
+                    if index < apps.count {
+                        row(apps[index], fraction: value(apps[index]) / top)
+                    } else {
+                        // 占位行，保证卡片高度不随应用数量变化
+                        Color.clear.frame(height: 22)
+                    }
+                }
+            }
+        }
+    }
+
+    private func value(_ app: AppEnergy) -> Double { energyAvailable ? app.watts : app.cpu }
+
+    private func row(_ app: AppEnergy, fraction: Double) -> some View {
+        HStack(spacing: 8) {
+            Image(nsImage: app.icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(app.name)
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    Text(energyAvailable ? formatWatts(app.watts) : String(format: "%.1f%%", app.cpu))
+                        .font(.system(size: 11.5, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(Ink.secondary)
+                }
+                MeterBar(fraction: fraction, tint: Color(red: 1.0, green: 0.55, blue: 0.25), height: 3)
+            }
+        }
+        .frame(height: 22)
+        .help("\(app.name)：CPU \(String(format: "%.1f%%", app.cpu))" + (energyAvailable ? "，约 \(formatWatts(app.watts))" : ""))
+    }
+
+    private func formatWatts(_ watts: Double) -> String {
+        watts >= 1 ? String(format: "%.1f W", watts) : String(format: "%.0f mW", watts * 1000)
     }
 }

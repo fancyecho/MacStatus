@@ -43,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.monitor.panelVisible = visible
             self.statusItem.button?.highlight(visible)
+            // 打开面板时顺便看看是否该检查更新（每天最多一次），不需要额外的定时器
+            if visible { UpdateChecker.shared.checkIfDue() }
             // 收起后回到概览页，下次打开总是先看到数据
             if !visible {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
@@ -62,14 +64,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateIcon() }
             .store(in: &subscriptions)
-        // 低电量模式下电池图标是彩色的，需要自己跟随菜单栏深浅色
+        // 低电量模式下电池图标是彩色的，需要自己跟随菜单栏深浅色。
+        // 注意：给按钮设置图片本身也会触发 effectiveAppearance 的 KVO，
+        // 必须只在深浅色真正切换时才重绘，否则会形成"设图片 → 通知 → 再设图片"的循环
         statusItem.button?.publisher(for: \.effectiveAppearance)
+            .map { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+            .removeDuplicates()
+            .dropFirst()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateIcon() }
             .store(in: &subscriptions)
         updateIcon()
 
         Snapshot.scheduleIfRequested(monitor: monitor, prefs: prefs, panel: panel, statusItem: statusItem)
+
+        // Status --check-update：检查一次更新并打印结果后退出
+        if CommandLine.arguments.contains("--check-update") {
+            let updater = UpdateChecker.shared
+            updater.check()
+            updater.$state
+                .filter { $0 != .checking && $0 != .idle }
+                .first()
+                .sink { state in
+                    print("当前版本 \(updater.currentVersion)：\(state)")
+                    exit(0)
+                }
+                .store(in: &subscriptions)
+        }
     }
 
     @objc private func togglePanel() {
@@ -77,9 +98,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.toggle(below: button)
     }
 
+    /// 上一次绘制时用到的全部输入；没变就不重绘，避免无谓的渲染和菜单栏刷新
+    private var lastIconKey: IconKey?
+
+    private struct IconKey: Equatable {
+        let values: MenuBarModel.Values
+        let toggles: [Bool]
+        let dark: Bool
+    }
+
     private func updateIcon() {
         let dark = statusItem.button?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        statusItem.button?.image = MenuBarIcon.render(values: monitor.menuBar.values, prefs: prefs, darkMenuBar: dark)
+        // 只比较菜单栏上实际显示的数值：隐藏的项（比如没显示网速时的网速）变化不需要重绘
+        var shown = monitor.menuBar.values
+        if !prefs.showCPU { shown.cpu = 0 }
+        if !prefs.showMemory { shown.memory = 0 }
+        if !prefs.showGPU { shown.gpu = nil }
+        if !prefs.showNetwork { shown.up = ""; shown.down = "" }
+        if !prefs.showTemperature { shown.temperature = nil }
+        if !prefs.showBattery { shown.battery = nil; shown.charging = false; shown.lowPower = false }
+        let key = IconKey(values: shown,
+                          toggles: [prefs.showCPU, prefs.showMemory, prefs.showGPU, prefs.showNetwork,
+                                    prefs.showBattery, prefs.showTemperature],
+                          dark: dark)
+        guard key != lastIconKey else { return }
+        lastIconKey = key
+        statusItem.button?.image = MenuBarIcon.render(values: key.values, prefs: prefs, darkMenuBar: dark)
     }
 }
 
@@ -89,142 +133,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum MenuBarIcon {
     static func render(values: MenuBarModel.Values, prefs: Preferences, darkMenuBar: Bool) -> NSImage {
         let colored = prefs.showBattery && values.battery != nil && values.lowPower
-        let ink: Color = colored && darkMenuBar ? .white : .black
-        let renderer = ImageRenderer(content: MenuBarContent(values: values, prefs: prefs, ink: ink, colored: colored))
-        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
-        let image = renderer.nsImage ?? NSImage()
+        let ink: NSColor = colored && darkMenuBar ? .white : .black
+        let fill: NSColor = colored ? NSColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1) : ink
+        let image = MenuBarRenderer.render(values: values, prefs: prefs, ink: ink, batteryFill: fill)
         image.isTemplate = !colored
         return image
-    }
-}
-
-private struct MenuBarContent: View {
-    let values: MenuBarModel.Values
-    let prefs: Preferences
-    let ink: Color
-    let colored: Bool
-
-    var body: some View {
-        HStack(spacing: 9) {
-            if prefs.showCPU {
-                StackedMetric(title: "CPU", value: values.cpu)
-            }
-            if prefs.showTemperature, let temperature = values.temperature {
-                StackedMetric(title: "TEMP", value: temperature, suffix: "°")
-            }
-            if prefs.showMemory {
-                StackedMetric(title: "MEM", value: values.memory)
-            }
-            if prefs.showGPU, let gpu = values.gpu {
-                StackedMetric(title: "GPU", value: gpu)
-            }
-            if prefs.showNetwork {
-                VStack(alignment: .trailing, spacing: -1.5) {
-                    rateLine(values.up, arrow: "arrow.up")
-                    rateLine(values.down, arrow: "arrow.down")
-                }
-                .frame(width: 44, alignment: .trailing)
-            }
-            if prefs.showBattery, let battery = values.battery {
-                MenuBarBattery(percent: battery, charging: values.charging, ink: ink,
-                               fill: colored ? Color(red: 1.0, green: 0.8, blue: 0.0) : ink)
-            }
-            if !prefs.showCPU && !prefs.showMemory && !prefs.showNetwork && !(prefs.showGPU && values.gpu != nil) && !(prefs.showBattery && values.battery != nil) && !(prefs.showTemperature && values.temperature != nil) {
-                Image(systemName: "gauge.with.dots.needle.33percent")
-                    .font(.system(size: 14, weight: .medium))
-            }
-        }
-        .foregroundStyle(ink)
-        .frame(height: 22)
-        .fixedSize()
-    }
-
-    private func rateLine(_ value: String, arrow: String) -> some View {
-        HStack(spacing: 2) {
-            Text(value)
-                .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
-            Image(systemName: arrow)
-                .font(.system(size: 6.5, weight: .black))
-                .opacity(0.6)
-        }
-    }
-}
-
-/// 两行：小标签 + 数值，左边一根竖向占用条
-private struct StackedMetric: View {
-    let title: String
-    let value: Int
-    var suffix = "%"
-
-    var body: some View {
-        HStack(spacing: 3) {
-            ZStack(alignment: .bottom) {
-                Capsule().opacity(0.22)
-                Capsule().frame(height: max(2, 16 * CGFloat(min(value, 100)) / 100))
-            }
-            .frame(width: 3.5, height: 16)
-            VStack(alignment: .leading, spacing: -2) {
-                Text(title)
-                    .font(.system(size: 7, weight: .bold))
-                    .opacity(0.6)
-                Text("\(value)\(suffix)")
-                    .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
-            }
-            .frame(width: 26, alignment: .leading)
-        }
-    }
-}
-
-/// 菜单栏电池：数字在电池里面（类似 iOS）。填充部分上的数字镂空，空白部分上的数字实心；充电时右侧带闪电
-private struct MenuBarBattery: View {
-    let percent: Int
-    let charging: Bool
-    let ink: Color
-    let fill: Color
-
-    private let size = CGSize(width: 25, height: 12)
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 3.8, style: .continuous)
-        let filled = max(2.5, size.width * CGFloat(min(max(percent, 0), 100)) / 100)
-        let number = Text("\(percent)")
-            .font(.system(size: percent >= 100 ? 8 : 9, weight: .bold, design: .rounded).monospacedDigit())
-            .frame(width: size.width, height: size.height)
-
-        HStack(spacing: 1.5) {
-            ZStack(alignment: .leading) {
-                shape.fill(ink.opacity(0.32))
-                Rectangle().fill(fill).frame(width: filled)
-            }
-            .frame(width: size.width, height: size.height)
-            .clipShape(shape)
-            .overlay {
-                ZStack {
-                    // 空白部分：实心数字
-                    number
-                        .foregroundStyle(ink)
-                        .mask(alignment: .leading) {
-                            HStack(spacing: 0) { Color.clear.frame(width: filled); Color.black }
-                        }
-                    // 填充部分：镂空数字
-                    number
-                        .mask(alignment: .leading) { Color.black.frame(width: filled) }
-                        .blendMode(.destinationOut)
-                }
-            }
-            .compositingGroup()
-
-            UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0,
-                                   bottomTrailingRadius: 1.2, topTrailingRadius: 1.2)
-                .fill(ink.opacity(0.4))
-                .frame(width: 1.6, height: 4.5)
-
-            if charging {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(ink)
-                    .padding(.leading, 1)
-            }
-        }
     }
 }
