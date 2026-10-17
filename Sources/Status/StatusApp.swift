@@ -32,8 +32,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(monitor)
             .environmentObject(prefs))
         panel.onVisibilityChange = { [weak self] visible in
-            self?.monitor.panelVisible = visible
-            self?.statusItem.button?.highlight(visible)
+            guard let self else { return }
+            self.monitor.panelVisible = visible
+            self.statusItem.button?.highlight(visible)
+            // 收起后回到概览页，下次打开总是先看到数据
+            if !visible {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    guard let self, !self.panel.isShown else { return }
+                    self.prefs.showingSettings = false
+                }
+            }
+        }
+        panel.onEscape = { [weak self] in
+            guard let self, self.prefs.showingSettings else { return false }
+            self.prefs.showingSettings = false
+            return true
         }
 
         // 数值或菜单栏设置变化时重绘图标（receive(on:) 保证读到的是变化后的值）

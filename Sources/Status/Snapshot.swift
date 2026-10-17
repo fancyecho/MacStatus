@@ -31,25 +31,50 @@ enum Snapshot {
     }
 
     private static func checkPanelPlacement(panel: StatusPanel, statusItem: NSStatusItem, prefs: Preferences) {
-        func describe(_ label: String) {
-            guard let button = statusItem.button, let window = button.window else { return }
-            let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
-            let screen = window.screen?.frame ?? .zero
-            print("\(label): icon=\(anchor) panel=\(panel.frame) gapToIcon=\(anchor.minY - panel.frame.maxY) screen=\(screen) visible=\(panel.isVisible)")
+        func anchor() -> NSRect {
+            guard let button = statusItem.button, let window = button.window else { return .zero }
+            return window.convertToScreen(button.convert(button.bounds, to: nil))
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+        func describe(_ label: String) {
+            print("\(label): icon=\(anchor()) panel=\(panel.frame) gapToIcon=\(anchor().minY - panel.frame.maxY) shown=\(panel.isShown)")
+        }
+        /// 模拟一次真实的鼠标点击（需要辅助功能权限，没有权限时事件会被系统丢弃）
+        func click(at point: NSPoint) {
+            let flipped = CGPoint(x: point.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - point.y)
+            for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+                CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: flipped, mouseButton: .left)?.post(tap: .cghidEventTap)
+            }
+        }
+        func after(_ seconds: Double, _ work: @escaping @MainActor () -> Void) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { MainActor.assumeIsolated(work) }
+        }
+
+        after(3) {
             guard let button = statusItem.button else { return }
             panel.show(below: button)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            var heights: [CGFloat] = []
+            for i in 1...6 {
+                after(Double(i) * 1.1) { heights.append(panel.frame.height) }
+            }
+            after(7.5) {
                 describe("overview")
+                print("heights over 6 ticks: \(heights)")
                 prefs.showingSettings = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                after(1) {
                     describe("settings")
-                    prefs.showingSettings = false
-                    panel.close()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        describe("closed")
-                        exit(0)
+                    print("trusted for synthetic clicks: \(AXIsProcessTrusted())")
+                    click(at: NSPoint(x: anchor().midX, y: anchor().midY))
+                    after(1) {
+                        describe("after clicking icon while open")
+                        click(at: NSPoint(x: anchor().midX, y: anchor().midY))
+                        after(1) {
+                            describe("after clicking icon again")
+                            click(at: NSPoint(x: 300, y: 450))
+                            after(1) {
+                                describe("after clicking elsewhere")
+                                exit(0)
+                            }
+                        }
                     }
                 }
             }

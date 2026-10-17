@@ -463,7 +463,10 @@ enum SystemInfo {
 // MARK: - Temperature
 
 struct TemperatureSnapshot: Equatable {
-    var cpu: Double?
+    var cpu: Double?          // 所选传感器的平均值
+    var cpuMax: Double?       // 其中最热的一个
+    var cpuSensorCount = 0
+    var cpuSource = ""
     var gpu: Double?
 }
 
@@ -484,6 +487,7 @@ final class TemperatureSampler {
     private var client: AnyObject?
     private var cpuSensors: [AnyObject] = []
     private var gpuSensors: [AnyObject] = []
+    private var cpuSource = ""
 
     init() {
         guard let iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW),
@@ -513,22 +517,29 @@ final class TemperatureSampler {
         }
         // M1/M2 有按核心簇划分的 pACC/eACC 传感器；较新的芯片退回到芯片核心温度 (tdie)
         cpuSensors = accSensors.isEmpty ? dieSensors : accSensors
+        cpuSource = accSensors.isEmpty ? "芯片 die 温度传感器 (PMU tdie)" : "CPU 核心簇传感器 (pACC/eACC)"
     }
 
     var isAvailable: Bool { !cpuSensors.isEmpty }
 
     func sample() -> TemperatureSnapshot? {
         guard isAvailable else { return nil }
-        return TemperatureSnapshot(cpu: average(cpuSensors), gpu: average(gpuSensors))
+        let cpu = readings(cpuSensors)
+        let gpu = readings(gpuSensors)
+        return TemperatureSnapshot(cpu: Self.average(cpu), cpuMax: cpu.max(), cpuSensorCount: cpu.count,
+                                   cpuSource: cpuSource, gpu: Self.average(gpu))
     }
 
-    private func average(_ sensors: [AnyObject]) -> Double? {
-        guard let copyEvent, let getFloat else { return nil }
-        let values = sensors.compactMap { sensor -> Double? in
+    private func readings(_ sensors: [AnyObject]) -> [Double] {
+        guard let copyEvent, let getFloat else { return [] }
+        return sensors.compactMap { sensor -> Double? in
             guard let event = copyEvent(sensor, Self.temperatureEvent, 0, 0)?.takeRetainedValue() else { return nil }
             let value = getFloat(event, Int32(Self.temperatureEvent << 16))
             return value > 0 && value < 150 ? value : nil
         }
-        return values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+    }
+
+    private static func average(_ values: [Double]) -> Double? {
+        values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
     }
 }

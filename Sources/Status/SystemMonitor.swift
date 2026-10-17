@@ -146,6 +146,7 @@ final class SystemMonitor: ObservableObject {
         }
         uptime = SystemInfo.uptime
         loadAverage = SystemInfo.loadAverage
+        if Self.demoMode { applyDemoData() }
 
         // 第一次采样没有差值，不计入历史；额外的刷新也不计入，保持时间轴均匀
         if !first && !full {
@@ -166,6 +167,22 @@ final class SystemMonitor: ObservableObject {
             temperature: temperature?.cpu.map { Int($0.rounded()) },
             charging: battery?.isCharging ?? false
         ))
+    }
+
+    /// STATUS_DEMO=1：用模拟的 GPU / 温度 / 电池数据填充界面，便于在没有这些传感器的机器上检查布局
+    private static let demoMode = ProcessInfo.processInfo.environment["STATUS_DEMO"] != nil
+
+    private func applyDemoData() {
+        gpu = Double.random(in: 4...45)
+        let cpuTemp = Double.random(in: 52...60)
+        temperature = TemperatureSnapshot(cpu: cpuTemp, cpuMax: cpuTemp + 7, cpuSensorCount: 10,
+                                          cpuSource: "演示数据", gpu: cpuTemp - 4)
+        // 故意让数值的位数来回跳，检查卡片高度是否稳定
+        let wide = tickCount % 2 == 0
+        disk.read = wide ? 123_400_000 : 820
+        disk.write = wide ? 4_560 : 98_700_000
+        battery = BatterySnapshot(percent: 78, isCharging: false, onAC: false, minutesRemaining: wide ? 312 : nil,
+                                  health: 98, cycles: 41, temperature: 31.2, watts: wide ? 6.4 : nil)
     }
 
     private static func push(_ value: Double, to history: inout [Double]) {

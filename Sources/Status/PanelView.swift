@@ -43,7 +43,8 @@ struct PanelView: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(SubtleButtonStyle())
-            .help(prefs.showingSettings ? "返回" : "设置")
+            .keyboardShortcut(",")
+            .help(prefs.showingSettings ? "返回（Esc）" : "设置（⌘,）")
         }
         .padding(.horizontal, 2)
         .padding(.bottom, 2)
@@ -91,8 +92,8 @@ struct PanelView: View {
 
     private var cpuTile: some View {
         Tile(title: "CPU", symbol: "cpu", tint: Palette.cpu) {
-            if let temp = monitor.temperature?.cpu {
-                TemperatureBadge(celsius: temp).help("CPU 温度")
+            if let t = monitor.temperature, let temp = t.cpu {
+                TemperatureBadge(celsius: temp).help(temperatureHelp(t))
             } else if let load = monitor.loadAverage.first {
                 Text(String(format: "%.2f", load)).monospacedDigit().help("1 分钟平均负载")
             }
@@ -100,7 +101,7 @@ struct PanelView: View {
             BigNumber(value: Fmt.percent(monitor.cpu.usage), unit: "%")
                 .help(monitor.loadAverage.isEmpty ? "" : "平均负载 " + monitor.loadAverage.map { String(format: "%.2f", $0) }.joined(separator: " / "))
             Sparkline(values: monitor.cpuHistory, maxValue: 100, tint: Palette.cpu)
-                .frame(height: 24)
+                .frame(minHeight: 24, maxHeight: .infinity)
             CoreBars(cores: monitor.cpu.cores, tint: Palette.cpu)
                 .frame(height: 12)
                 .help("每个核心的占用")
@@ -108,6 +109,7 @@ struct PanelView: View {
                 Text("用户 \(Fmt.percent(monitor.cpu.user))%")
                 Text("系统 \(Fmt.percent(monitor.cpu.system))%")
             }
+            .lineLimit(1)
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(Ink.secondary)
             .monospacedDigit()
@@ -118,7 +120,12 @@ struct PanelView: View {
         let m = monitor.memory
         let (used, unit) = Fmt.bytesParts(Double(m.used), base: 1024)
         return Tile(title: "内存", symbol: "memorychip", tint: Palette.memory) {
-            PressureBadge(level: m.pressureLevel)
+            if m.pressureLevel > 1 {
+                PressureBadge(level: m.pressureLevel)
+            } else {
+                Text("\(Fmt.percent(m.usedPercent))%").monospacedDigit()
+                    .help("内存压力正常。macOS 会主动把空闲内存用作缓存并压缩不常用的数据，所以占用高是正常的，只有内存压力升高时才需要关注。")
+            }
         } content: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 BigNumber(value: used, unit: unit)
@@ -136,9 +143,7 @@ struct PanelView: View {
                 Legend(color: Palette.memory, label: "应用", value: Fmt.memory(m.app))
                 Legend(color: Palette.memory.opacity(0.6), label: "联动", value: Fmt.memory(m.wired))
                 Legend(color: Palette.memory.opacity(0.35), label: "压缩", value: Fmt.memory(m.compressed))
-                if m.swapUsed > 0 {
-                    Legend(color: Ink.tertiary, label: "交换", value: Fmt.memory(m.swapUsed))
-                }
+                Legend(color: Ink.tertiary, label: "交换", value: Fmt.memory(m.swapUsed))
             }
         }
     }
@@ -151,7 +156,7 @@ struct PanelView: View {
         } content: {
             BigNumber(value: Fmt.percent(monitor.gpu ?? 0), unit: "%")
             Sparkline(values: monitor.gpuHistory, maxValue: 100, tint: Palette.gpu)
-                .frame(minHeight: 24)
+                .frame(minHeight: 24, maxHeight: .infinity)
         }
     }
 
@@ -164,14 +169,10 @@ struct PanelView: View {
             BigNumber(value: free, unit: "\(unit) 可用")
             MeterBar(fraction: d.usedPercent / 100, tint: Palette.disk)
                 .padding(.vertical, 2)
-            HStack(spacing: 10) {
-                Label(Fmt.rate(d.read), systemImage: "arrow.down.doc").help("读取")
-                Label(Fmt.rate(d.write), systemImage: "arrow.up.doc").help("写入")
+            VStack(spacing: 2) {
+                Legend(color: Palette.disk, label: "读取", value: Fmt.rate(d.read), symbol: "arrow.down")
+                Legend(color: Palette.disk.opacity(0.7), label: "写入", value: Fmt.rate(d.write), symbol: "arrow.up")
             }
-            .labelStyle(CompactLabelStyle())
-            .font(.system(size: 10.5, weight: .medium))
-            .foregroundStyle(Ink.secondary)
-            .monospacedDigit()
         }
     }
 
@@ -189,9 +190,11 @@ struct PanelView: View {
                 .frame(height: 44)
             HStack {
                 Text("开机以来  ↓ \(Fmt.bytes(n.totalDown))  ↑ \(Fmt.bytes(n.totalUp))")
-                Spacer()
+                Spacer(minLength: 8)
                 Text("峰值 \(Fmt.rate(max(monitor.downHistory.max() ?? 0, monitor.upHistory.max() ?? 0)))")
             }
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(Ink.tertiary)
             .monospacedDigit()
@@ -201,10 +204,11 @@ struct PanelView: View {
 
 // MARK: - Pieces
 
-private struct CompactLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 3) { configuration.icon; configuration.title }
-    }
+private func temperatureHelp(_ t: TemperatureSnapshot) -> String {
+    var lines = ["CPU 温度：\(t.cpuSensorCount) 个传感器的平均值"]
+    if let max = t.cpuMax { lines.append(String(format: "其中最高 %.0f°C", max)) }
+    lines.append("来源：\(t.cpuSource)")
+    return lines.joined(separator: "\n")
 }
 
 private struct RateView: View {
@@ -240,16 +244,13 @@ private struct PressureBadge: View {
     let level: Int
 
     var body: some View {
-        let (text, color): (String, Color) = switch level {
-        case 4: ("严重", .red)
-        case 2: ("警告", .orange)
-        default: ("正常", .green)
-        }
+        let (text, color): (String, Color) = level >= 4 ? ("压力过高", .red) : ("压力偏高", .orange)
         HStack(spacing: 3) {
             Circle().fill(color).frame(width: 5, height: 5)
             Text(text)
         }
-        .help("内存压力")
+        .foregroundStyle(color)
+        .help("系统内存压力升高，可能开始频繁压缩或使用交换空间，可以关闭一些占内存的应用。")
     }
 }
 
@@ -264,17 +265,20 @@ private struct BatteryCard: View {
                 Text(status)
                     .font(.system(size: 11))
                     .foregroundStyle(Ink.secondary)
+                    .lineLimit(1)
             }
             Spacer()
+            // 固定四行，数据暂缺时显示占位，避免卡片高度跳动
             Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 2) {
-                if let health = battery.health { stat("健康度", "\(health)%") }
-                if let cycles = battery.cycles { stat("循环", "\(cycles)") }
-                if let temp = battery.temperature { stat("温度", String(format: "%.1f°C", temp)) }
-                if let watts = battery.watts { stat("功率", String(format: "%.1f W", watts)) }
+                stat("健康度", battery.health.map { "\($0)%" })
+                stat("循环", battery.cycles.map { "\($0)" })
+                stat("温度", battery.temperature.map { String(format: "%.1f°C", $0) })
+                stat("功率", battery.watts.map { String(format: "%.1f W", $0) })
             }
             .font(.system(size: 11))
+            .lineLimit(1)
         }
-        .padding(10)
+        .padding(11)
         .card()
     }
 
@@ -286,10 +290,13 @@ private struct BatteryCard: View {
         return battery.minutesRemaining.map { "剩余 \(Fmt.minutes($0))" } ?? "使用电池"
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
+    private func stat(_ label: String, _ value: String?) -> some View {
         GridRow {
             Text(label).foregroundStyle(Ink.secondary)
-            Text(value).monospacedDigit().gridColumnAlignment(.trailing)
+            Text(value ?? "—")
+                .monospacedDigit()
+                .foregroundStyle(value == nil ? Ink.tertiary : .primary)
+                .gridColumnAlignment(.trailing)
         }
     }
 }
@@ -367,6 +374,8 @@ private struct ProcessCard: View {
                     }
                     .font(.system(size: 12))
                     .frame(height: 20)
+                    .contentShape(Rectangle())
+                    .help("\(row.name)\nPID \(row.id) · CPU \(String(format: "%.1f%%", row.cpu)) · 内存 \(Fmt.memory(row.memory))")
                 }
             }
         }

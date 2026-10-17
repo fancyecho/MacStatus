@@ -112,19 +112,29 @@ struct BigNumber: View {
     }
 }
 
+/// 一行"标签 …… 数值"，左边是色点或小图标。单行、等宽数字，数值变化不会改变高度
 struct Legend: View {
     let color: Color
     let label: String
     let value: String
+    var symbol: String? = nil
 
     var body: some View {
         HStack(spacing: 5) {
-            Circle().fill(color).frame(width: 6, height: 6)
+            if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 8.5, weight: .heavy))
+                    .foregroundStyle(color)
+                    .frame(width: 8)
+            } else {
+                Circle().fill(color).frame(width: 6, height: 6)
+            }
             Text(label).foregroundStyle(Ink.secondary)
             Spacer(minLength: 4)
             Text(value).monospacedDigit()
         }
         .font(.system(size: 11))
+        .lineLimit(1)
     }
 }
 
