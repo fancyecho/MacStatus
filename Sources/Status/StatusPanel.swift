@@ -17,7 +17,6 @@ final class StatusPanel: NSPanel {
     /// 按 Esc 时先交给内容处理（例如从设置页返回），返回 false 才收起面板
     var onEscape: (() -> Bool)?
 
-    private let effectView = NSVisualEffectView()
     private var contentHeight: CGFloat = 0
     private var clickMonitor: Any?
     private var keyMonitor: Any?
@@ -42,26 +41,56 @@ final class StatusPanel: NSPanel {
         isMovable = false
         animationBehavior = .none
 
-        effectView.material = .popover
-        effectView.blendingMode = .behindWindow
-        effectView.state = .active
-        effectView.maskImage = Self.roundedMask(radius: Metrics.panelRadius)
-
         let hosting = NSHostingView(rootView: rootView
-            .background(SizeReader { [weak self] size in self?.contentSizeChanged(size) })
-            .overlay(PanelEdge()))
+            .background { SizeReader { [weak self] size in self?.contentSizeChanged(size) } }
+            .overlay { if !Self.usesSystemGlass { PanelEdge() } })
         hosting.translatesAutoresizingMaskIntoConstraints = false
-        effectView.addSubview(hosting)
+        let container = NSView()
+        container.addSubview(hosting)
         // 只固定顶部：内容变矮时窗口从下往上收，顶部始终贴着菜单栏
         NSLayoutConstraint.activate([
-            hosting.topAnchor.constraint(equalTo: effectView.topAnchor),
-            hosting.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: container.topAnchor),
+            hosting.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: container.trailingAnchor),
         ])
-        contentView = effectView
+        contentView = Self.makeBackdrop(around: container)
     }
 
     override var canBecomeKey: Bool { true }
+
+    /// macOS 26 起面板用系统的 Liquid Glass，边缘高光由系统绘制，不再叠加 PanelEdge
+    static var usesSystemGlass: Bool {
+        if #available(macOS 26.0, *) { true } else { false }
+    }
+
+    /// macOS 26 起用 NSGlassEffectView；更早的系统用毛玻璃 + 连续曲率圆角遮罩
+    private static func makeBackdrop(around content: NSView) -> NSView {
+        if #available(macOS 26.0, *) {
+            let glass = PanelGlassView()
+            glass.cornerRadius = Metrics.panelRadius
+            glass.contentView = content
+            // 玻璃本身不裁剪窗口形状，系统会按整个矩形算窗口阴影，圆角外露出一块深色直角。
+            // 套一层圆角裁剪后，阴影也跟着变成圆角
+            let clip = NSView()
+            clip.wantsLayer = true
+            clip.layer?.cornerRadius = Metrics.panelRadius
+            clip.layer?.cornerCurve = .continuous
+            clip.layer?.masksToBounds = true
+            glass.frame = clip.bounds
+            glass.autoresizingMask = [.width, .height]
+            clip.addSubview(glass)
+            return clip
+        }
+        let effectView = NSVisualEffectView()
+        effectView.material = .popover
+        effectView.blendingMode = .behindWindow
+        effectView.state = .active
+        effectView.maskImage = roundedMask(radius: Metrics.panelRadius)
+        content.frame = effectView.bounds
+        content.autoresizingMask = [.width, .height]
+        effectView.addSubview(content)
+        return effectView
+    }
 
     func toggle(below button: NSStatusBarButton) {
         if isShown {
@@ -177,6 +206,26 @@ final class StatusPanel: NSPanel {
         image.capInsets = NSEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
         image.resizingMode = .stretch
         return image
+    }
+}
+
+/// 浅色模式下常规玻璃在浅色背景上偏白，往深色轻轻着色，更接近背景、卡片边界也更清楚。
+/// （clear 玻璃在浅色模式下反而更亮，不适合这里）
+@available(macOS 26.0, *)
+private final class PanelGlassView: NSGlassEffectView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyAppearance()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyAppearance()
+    }
+
+    private func applyAppearance() {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        tintColor = dark ? nil : NSColor(white: 0, alpha: 0.06)
     }
 }
 

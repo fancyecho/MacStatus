@@ -5,6 +5,7 @@ struct PanelView: View {
     @EnvironmentObject private var monitor: SystemMonitor
     @EnvironmentObject private var prefs: Preferences
     @ObservedObject private var updater = UpdateChecker.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 8) {
@@ -12,13 +13,13 @@ struct PanelView: View {
             switch prefs.page {
             case .overview:
                 overview
-                    .transition(.opacity.combined(with: .move(edge: .leading)))
+                    .transition(pageTransition(from: .leading))
             case .settings:
                 SettingsView()
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    .transition(pageTransition(from: .trailing))
             case .battery:
                 BatteryDetailView()
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    .transition(pageTransition(from: .trailing))
             }
             footer
         }
@@ -26,6 +27,11 @@ struct PanelView: View {
         .padding(.top, 2)
         .frame(width: 340)
         .animation(.snappy(duration: 0.25), value: prefs.page)
+    }
+
+    /// 切换页面时从侧边滑入；开启"减弱动态效果"时只淡入淡出
+    private func pageTransition(from edge: Edge) -> AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .move(edge: edge))
     }
 
     // MARK: Header / Footer

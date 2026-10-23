@@ -41,14 +41,18 @@ struct CardBackground: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous)
         let dark = scheme == .dark
         content
-            .background(shape.fill(Color.white.opacity(dark ? 0.065 : 0.5)))
-            .overlay(
+            .background { shape.fill(Color.white.opacity(dark ? 0.065 : 0.5)) }
+            .overlay {
                 shape.strokeBorder(
                     LinearGradient(colors: [.white.opacity(dark ? 0.16 : 0.9), .white.opacity(dark ? 0.03 : 0.35)],
                                    startPoint: .top, endPoint: .bottom),
                     lineWidth: 0.7)
-            )
-            .shadow(color: .black.opacity(dark ? 0.16 : 0.05), radius: 3, y: 1)
+            }
+            // 浅色模式下白色高光边在浅背景上看不出来，再加一圈很淡的深色细线勾出卡片边界
+            .overlay {
+                if !dark { shape.strokeBorder(Color.black.opacity(0.07), lineWidth: 0.5) }
+            }
+            .shadow(color: .black.opacity(dark ? 0.16 : 0.07), radius: dark ? 3 : 4, y: 1)
     }
 }
 
@@ -280,7 +284,7 @@ struct MirrorChart: View {
                     .frame(height: half.height)
                     .scaleEffect(x: 1, y: -1)
             }
-            .overlay(Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 0.5))
+            .overlay { Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 0.5) }
         }
     }
 }
@@ -307,10 +311,10 @@ private struct HoverHighlight<Label: View>: View {
         label
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(
+            .background {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.primary.opacity(pressed ? 0.14 : state.hovering ? 0.08 : 0))
-            )
+            }
             .contentShape(Rectangle())
             .onHover { state.hovering = $0 }
     }
@@ -331,7 +335,7 @@ private struct CardHover<Label: View>: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous)
         label
-            .overlay(shape.fill(Color.primary.opacity(pressed ? 0.07 : state.hovering ? 0.035 : 0)).allowsHitTesting(false))
+            .overlay { shape.fill(Color.primary.opacity(pressed ? 0.07 : state.hovering ? 0.035 : 0)).allowsHitTesting(false) }
             .contentShape(shape)
             .scaleEffect(pressed ? 0.985 : 1)
             .animation(.easeOut(duration: 0.12), value: state.hovering)

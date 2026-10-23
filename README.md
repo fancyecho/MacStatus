@@ -31,7 +31,7 @@ scripts/make-icon.sh  # regenerates the app icon (after editing scripts/make-ico
 ## Features
 
 - **Menu bar**: CPU, CPU temperature, memory, GPU, network speed and battery, each toggled independently. It is rendered as a template image, so it adapts to light and dark menu bars automatically.
-- **Panel**: a frosted-glass panel attached under the menu bar icon. Click the icon to open or close it; clicking elsewhere or pressing Esc also closes it, and ⌘, opens settings. CPU (history curve, per-core bars, temperature), memory (app / wired / compressed / swap breakdown; a badge appears only when memory pressure is high), GPU, disk (free space, read/write speed), network (mirrored up/down chart), battery (health, cycle count, temperature, power draw), and top 5 processes by CPU or memory.
+- **Panel**: a glass panel attached under the menu bar icon (Liquid Glass on macOS 26 and later, frosted glass on earlier versions). Click the icon to open or close it; clicking elsewhere or pressing Esc also closes it, and ⌘, opens settings. CPU (history curve, per-core bars, temperature), memory (app / wired / compressed / swap breakdown; a badge appears only when memory pressure is high), GPU, disk (free space, read/write speed), network (mirrored up/down chart), battery (health, cycle count, temperature, power draw), and top 5 processes by CPU or memory.
 - **Battery details** (click the battery card): time to full (or to the charge limit) / estimated time remaining, power flow (adapter input = computer consumption + power into the battery), computer power history, **apps using the most power** (estimated from the system's per-process CPU energy counters, with helper processes counted toward their app), max capacity / health, cycle count, temperature, voltage, current, and capacity in mAh. The battery turns yellow in Low Power Mode.
 - **Menu bar battery icon**: the percentage sits inside the battery, with a bolt beside it while charging and a yellow fill in Low Power Mode.
 
@@ -52,6 +52,7 @@ The panel only refreshes the UI while it's open. While closed, only what the men
 ```bash
 STATUS_SNAPSHOT=/some/dir build/Status.app/Contents/MacOS/Status  # renders the panel to PNGs and exits
 STATUS_CHECK_PANEL=1 build/Status.app/Contents/MacOS/Status        # opens the panel, checks position, height stability and click-to-close
+STATUS_SHOW_PANEL=3 build/Status.app/Contents/MacOS/Status         # only opens the panel for 3 seconds (no synthetic clicks), for screenshots; add STATUS_APPEARANCE=dark/light to force an appearance
 STATUS_DEMO=1 build/Status.app/Contents/MacOS/Status              # fills GPU / temperature / battery with simulated data to check layout
 /Applications/Status.app/Contents/MacOS/Status --battery-info   # prints the raw battery fields and how they were parsed (no serial numbers)
 /Applications/Status.app/Contents/MacOS/Status --check-update   # checks for updates once and prints the result

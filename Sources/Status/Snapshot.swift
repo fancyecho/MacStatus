@@ -4,12 +4,17 @@ import SwiftUI
 /// 调试用：
 /// - STATUS_SNAPSHOT=<目录>：把面板渲染成 PNG 后退出（离屏渲染没有真实模糊，用纯色近似）
 /// - STATUS_CHECK_PANEL=1：真实打开面板，打印它和菜单栏图标的位置后退出
+/// - STATUS_SHOW_PANEL=<秒>：只打开面板（不模拟点击），停留后退出；可配合 STATUS_APPEARANCE=dark/light
 @MainActor
 enum Snapshot {
     static func scheduleIfRequested(monitor: SystemMonitor, prefs: Preferences, panel: StatusPanel, statusItem: NSStatusItem) {
         let env = ProcessInfo.processInfo.environment
         if env["STATUS_CHECK_PANEL"] != nil {
             checkPanelPlacement(panel: panel, statusItem: statusItem, prefs: prefs)
+            return
+        }
+        if let seconds = env["STATUS_SHOW_PANEL"].flatMap(Double.init) {
+            showPanelForCapture(panel: panel, statusItem: statusItem, seconds: seconds)
             return
         }
         guard let dir = env["STATUS_SNAPSHOT"] else { return }
@@ -39,6 +44,26 @@ enum Snapshot {
                         to: "\(dir)/battery-icons-\(dark ? "dark" : "light").png")
             }
             exit(0)
+        }
+    }
+
+    /// 只打开面板、不模拟点击，停留若干秒后退出，方便截屏检查真实的玻璃效果
+    private static func showPanelForCapture(panel: StatusPanel, statusItem: NSStatusItem, seconds: Double) {
+        // STATUS_APPEARANCE=dark/light：不改系统设置也能检查两种外观
+        switch ProcessInfo.processInfo.environment["STATUS_APPEARANCE"] {
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        default: break
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            guard let button = statusItem.button else { return }
+            panel.show(below: button)
+            // 等打开动画和内容高度调整结束后再报告位置
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                print("panel=\(panel.frame) window=\(panel.windowNumber)")
+                fflush(stdout)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { exit(0) }
         }
     }
 
@@ -138,7 +163,7 @@ private struct PanelPreview: View {
         PanelView()
             .background(dark ? Color(red: 0.16, green: 0.16, blue: 0.19) : Color(red: 0.93, green: 0.93, blue: 0.95))
             .clipShape(RoundedRectangle(cornerRadius: Metrics.panelRadius, style: .continuous))
-            .overlay(PanelEdge())
+            .overlay { PanelEdge() }
             .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
             .padding(28)
             .background(LinearGradient(colors: dark ? [Color(red: 0.1, green: 0.12, blue: 0.25), Color(red: 0.25, green: 0.1, blue: 0.2)]
