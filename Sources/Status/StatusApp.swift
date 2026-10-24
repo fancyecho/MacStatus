@@ -2,32 +2,41 @@ import Combine
 import SwiftUI
 
 @main
-struct StatusApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-
-    init() {
-        // Status --battery-info：打印电池原始数据后退出，用于排查字段
+@MainActor
+enum StatusApp {
+    static func main() {
         if CommandLine.arguments.contains("--battery-info") {
             BatterySampler.printDiagnostics()
-            exit(0)
+            return
         }
-    }
-
-    var body: some Scene {
-        // 界面全部由 AppDelegate 里的状态栏图标和自定义面板负责
-        Settings { EmptyView() }
+        // The app already owns a status item and NSPanel; a SwiftUI Settings scene
+        // would create a second, empty window when launched/reopened by Finder.
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        let delegate = AppDelegate()
+        application.delegate = delegate
+        withExtendedLifetime(delegate) { application.run() }
     }
 }
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let prefs = Preferences()
+    private let networkDiagnostics = ClaudeNetworkMonitor()
     private lazy var monitor = SystemMonitor(prefs: prefs)
     private var statusItem: NSStatusItem!
     private var panel: StatusPanel!
     private var subscriptions = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let fixture = ProcessInfo.processInfo.environment["STATUS_NETWORK_FIXTURE"],
+           let sample = NetworkSnapshotFixture.make(fixture) {
+            networkDiagnostics.useDemo(sample, dns: NetworkSnapshotFixture.dns(fixture))
+        }
+        networkDiagnostics.setEnabled(prefs.enableClaudeDiagnostics)
+        prefs.$enableClaudeDiagnostics.dropFirst().sink { [weak self] enabled in
+            self?.networkDiagnostics.setEnabled(enabled)
+        }.store(in: &subscriptions)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.imagePosition = .imageOnly
@@ -38,7 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel = StatusPanel(rootView: PanelView()
             .environmentObject(monitor)
-            .environmentObject(prefs))
+            .environmentObject(prefs)
+            .environmentObject(networkDiagnostics))
         panel.onVisibilityChange = { [weak self] visible in
             guard let self else { return }
             self.monitor.panelVisible = visible
@@ -47,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if visible { UpdateChecker.shared.checkIfDue() }
             // 收起后回到概览页，下次打开总是先看到数据
             if !visible {
+                self.networkDiagnostics.setVisible(false)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                     guard let self, !self.panel.isShown else { return }
                     self.prefs.page = .overview
@@ -76,7 +87,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &subscriptions)
         updateIcon()
 
-        Snapshot.scheduleIfRequested(monitor: monitor, prefs: prefs, panel: panel, statusItem: statusItem)
+        if ProcessInfo.processInfo.environment["STATUS_PAGE"] == "network" { prefs.page = .network }
+        Snapshot.scheduleIfRequested(monitor: monitor, prefs: prefs, panel: panel, statusItem: statusItem,
+                                     networkDiagnostics: networkDiagnostics)
+
+        // Read-only diagnostics without opening the panel, for target-machine verification.
+        if CommandLine.arguments.contains("--check-network") {
+            networkDiagnostics.refresh()
+            networkDiagnostics.$isRefreshing.filter { !$0 }.first().sink { [weak self] _ in
+                guard let result = self?.networkDiagnostics.result else { exit(2) }
+                print("Status 请求路径 · \(result.checkedAt.ISO8601Format())")
+                print("Claude 出口：\(result.exit?.ip ?? "未知")")
+                print("API 出口：\(result.apiExit?.ip ?? "未知")")
+                print("地区：\(result.place)")
+                print("IP 属性：\(result.risk?.kind.rawValue ?? "未知")")
+                print("Net.Coffee 第三方评分：\(result.risk?.trustScore.map { String($0) } ?? "未知")")
+                if let dns = self?.networkDiagnostics.dns {
+                    print("DNS：\(dns.assessment(comparedTo: result.exit).title) · \(dns.addresses.map(\.ip).joined(separator: ", "))")
+                }
+                if let udp = self?.networkDiagnostics.webRTC {
+                    print("WebRTC UDP：\(udp.assessment(comparedTo: result.exit).title) · \(udp.publicIPs.joined(separator: ", "))")
+                    if let reason = udp.error { print(reason) }
+                }
+                if let error = result.riskError { print(error) }
+                for probe in result.probes {
+                    print("\(probe.host)：\(probe.status.title) · HTTP \(probe.httpStatus.map(String.init) ?? "—") · \(probe.milliseconds.map { String(format: "%.0f ms", $0) } ?? "—")")
+                }
+                exit(result.exit == nil ? 2 : 0)
+            }.store(in: &subscriptions)
+        }
 
         // Status --check-update：检查一次更新并打印结果后退出
         if CommandLine.arguments.contains("--check-update") {
@@ -91,6 +130,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 .store(in: &subscriptions)
         }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !panel.isShown, let button = statusItem.button { panel.show(below: button) }
+        return false
     }
 
     @objc private func togglePanel() {

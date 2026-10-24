@@ -7,8 +7,19 @@ import SwiftUI
 /// - STATUS_SHOW_PANEL=<秒>：只打开面板（不模拟点击），停留后退出；可配合 STATUS_APPEARANCE=dark/light
 @MainActor
 enum Snapshot {
-    static func scheduleIfRequested(monitor: SystemMonitor, prefs: Preferences, panel: StatusPanel, statusItem: NSStatusItem) {
+    static func scheduleIfRequested(monitor: SystemMonitor, prefs: Preferences, panel: StatusPanel, statusItem: NSStatusItem,
+                                    networkDiagnostics: ClaudeNetworkMonitor) {
         let env = ProcessInfo.processInfo.environment
+        if env["STATUS_CHECK_STARTUP"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                // Menu-bar icon windows are expected; count actual app content windows.
+                let visible = NSApp.windows.filter { $0.isVisible && String(describing: type(of: $0)) != "NSStatusBarWindow" }
+                print("startupContentWindows=\(visible.count)")
+                visible.forEach { print("\(type(of: $0)): \($0.title)") }
+                exit(visible.isEmpty ? 0 : 2)
+            }
+            return
+        }
         if env["STATUS_CHECK_PANEL"] != nil {
             checkPanelPlacement(panel: panel, statusItem: statusItem, prefs: prefs)
             return
@@ -18,29 +29,44 @@ enum Snapshot {
             return
         }
         guard let dir = env["STATUS_SNAPSHOT"] else { return }
+        if env["STATUS_NETWORK_LIVE"] != nil { networkDiagnostics.refresh() }
         let delay = Double(env["STATUS_SNAPSHOT_DELAY"] ?? "") ?? 7
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            if env["STATUS_SNAPSHOT_NETWORK_ONLY"] != nil {
+                prefs.page = .network
+                for dark in [false, true] {
+                    capture(PanelPreview(), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics,
+                            dark: dark, to: "\(dir)/network-\(dark ? "dark" : "light").png")
+                }
+                exit(0)
+            }
             for dark in [false, true] {
                 prefs.page = .overview
-                capture(PanelPreview(), monitor: monitor, prefs: prefs, dark: dark, to: "\(dir)/panel-\(dark ? "dark" : "light").png")
+                capture(PanelPreview(), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics, dark: dark, to: "\(dir)/panel-\(dark ? "dark" : "light").png")
+            }
+            prefs.page = .network
+            for dark in [false, true] {
+                capture(PanelPreview(), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics, dark: dark,
+                        to: "\(dir)/network-\(dark ? "dark" : "light").png")
             }
             prefs.page = .settings
-            capture(PanelPreview(), monitor: monitor, prefs: prefs, dark: false, to: "\(dir)/settings.png")
+            capture(PanelPreview(), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics, dark: false, to: "\(dir)/settings.png")
+            capture(PanelPreview(), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics, dark: true, to: "\(dir)/settings-dark.png")
             if monitor.battery != nil {
                 prefs.page = .battery
                 for dark in [false, true] {
-                    capture(PanelPreview(), monitor: monitor, prefs: prefs, dark: dark, to: "\(dir)/battery-\(dark ? "dark" : "light").png")
+                    capture(PanelPreview(), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics, dark: dark, to: "\(dir)/battery-\(dark ? "dark" : "light").png")
                 }
             }
             prefs.page = .overview
             for dark in [false, true] {
-                capture(MenuBarStrip(values: monitor.menuBar.values, prefs: prefs), monitor: monitor, prefs: prefs, dark: dark,
+                capture(MenuBarStrip(values: monitor.menuBar.values, prefs: prefs), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics, dark: dark,
                         to: "\(dir)/menubar-\(dark ? "dark" : "light").png")
             }
             // 电池图标的几种状态：普通 / 充电 / 低电量 / 低电量模式 / 充满
             for dark in [false, true] {
                 let icons = batteryIcons(prefs: prefs, dark: dark)
-                capture(IconRow(images: icons), monitor: monitor, prefs: prefs, dark: dark,
+                capture(IconRow(images: icons), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics, dark: dark,
                         to: "\(dir)/battery-icons-\(dark ? "dark" : "light").png")
             }
             exit(0)
@@ -129,10 +155,11 @@ enum Snapshot {
         }
     }
 
-    private static func capture<V: View>(_ view: V, monitor: SystemMonitor, prefs: Preferences, dark: Bool, to path: String) {
+    private static func capture<V: View>(_ view: V, monitor: SystemMonitor, prefs: Preferences, networkDiagnostics: ClaudeNetworkMonitor, dark: Bool, to path: String) {
         let root = view
             .environmentObject(monitor)
             .environmentObject(monitor.menuBar)
+            .environmentObject(networkDiagnostics)
             .environmentObject(prefs)
             .environment(\.colorScheme, dark ? .dark : .light)
         let host = NSHostingView(rootView: root)
@@ -216,5 +243,43 @@ private struct IconRow: View {
         .padding(.horizontal, 14)
         .frame(height: 30)
         .background(scheme == .dark ? Color(white: 0.17) : Color(white: 0.95))
+    }
+}
+
+/// Reserved documentation IPs, clearly marked as demo in the UI. No network requests in this mode.
+@MainActor
+enum NetworkSnapshotFixture {
+    static func dns(_ mode: String) -> DNSLeakResult {
+        var addresses = [
+            DNSObservedAddress(ip: "203.0.113.1", countryCode: "US", country: "United States", isp: "Example Resolver"),
+            DNSObservedAddress(ip: "203.0.113.2", countryCode: "SG", country: "Singapore", isp: "Example Resolver")
+        ]
+        if mode == "cn-dns" { addresses.append(DNSObservedAddress(ip: "198.51.100.3", countryCode: "CN", country: "China", isp: "演示解析器")) }
+        if mode == "dns-unknown" { addresses.append(DNSObservedAddress(ip: "198.51.100.4")) }
+        return DNSLeakResult(checkedAt: Date(), addresses: addresses)
+    }
+
+    static func make(_ mode: String) -> ClaudeNetworkResult? {
+        guard ["residential", "ipv6", "blocked", "partial", "unknown", "zero", "cn-dns", "dns-unknown"].contains(mode) else { return nil }
+        let ip = mode == "ipv6" ? "2001:db8:1234:5678:abcd:ef01:2345:6789" : "203.0.113.42"
+        let trace = mode == "blocked" ? nil : ClaudeExit(ip: ip, countryCode: "US")
+        let probes = [
+            ClaudeProbe(host: "claude.ai", status: mode == "blocked" ? .restricted : .reachable,
+                        httpStatus: mode == "blocked" ? 403 : 200, milliseconds: 182, exit: trace),
+            ClaudeProbe(host: "api.anthropic.com", status: .reachable, httpStatus: 200, milliseconds: 156,
+                        exit: mode == "ipv6" ? ClaudeExit(ip: "203.0.113.24", countryCode: "US") : trace),
+            ClaudeProbe(host: "www.anthropic.com", status: .timedOut),
+        ]
+        let data = Data("""
+        {"ip":"\(ip)", "trust_score":\(mode == "unknown" ? "null" : mode == "zero" ? "0" : "96"),
+         "isResidential":\(mode == "unknown" ? "null" : "true"), "is_datacenter":false,
+         "is_vpn":false,"is_proxy":false,"is_tor":false,"is_abuser":false,
+         "asn":7922,"asOrganization":"Example Residential Internet Communications Company",
+         "country":"United States","countryCode":"US","city":"Los Angeles"}
+        """.utf8)
+        let risk = ["blocked", "partial"].contains(mode) ? nil : try? JSONDecoder().decode(ClaudeIPRisk.self, from: data)
+        return ClaudeNetworkResult(checkedAt: Date(), probes: probes, risk: risk,
+                                   riskError: mode == "partial" ? "数据源请求受限，稍后重试" : nil,
+                                   riskFetchedAt: risk == nil ? nil : Date())
     }
 }

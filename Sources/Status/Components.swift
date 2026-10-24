@@ -291,6 +291,138 @@ struct MirrorChart: View {
 
 // MARK: - Buttons
 
+/// Intrinsically sized choices with separate glass surfaces and real spacing.
+/// Labels never stretch to fill a rail; used for compact process sorting.
+struct GlassSegmentedControl<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [(Value, String)]
+    var height: CGFloat = 20
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(_ title: String, selection: Binding<Value>, options: [(Value, String)], height: CGFloat = 20) {
+        self.title = title
+        self._selection = selection
+        self.options = options
+        self.height = height
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(options.indices, id: \.self) { index in
+                let option = options[index]
+                let selected = selection == option.0
+                Button { selection = option.0 } label: {
+                    Text(option.1)
+                        .font(.system(size: 10.5, weight: selected ? .semibold : .medium))
+                        .foregroundStyle(selected ? Color.primary : Ink.secondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, height <= 18 ? 7 : 8)
+                        .frame(height: height)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .contentShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(GlassSegmentStyle(selected: selected))
+                .accessibilityLabel(option.1)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: selection)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+    }
+}
+
+/// Shows only the current value until the native choice menu is opened.
+struct GlassChoiceMenu<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [(Value, String)]
+    @Environment(\.colorScheme) private var scheme
+
+    init(_ title: String, selection: Binding<Value>, options: [(Value, String)]) {
+        self.title = title
+        self._selection = selection
+        self.options = options
+    }
+
+    private var selectedTitle: String {
+        options.first { $0.0 == selection }?.1 ?? "—"
+    }
+
+    var body: some View {
+        Menu {
+            Picker(title, selection: $selection) {
+                ForEach(options.indices, id: \.self) { index in
+                    Text(options[index].1).tag(options[index].0)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            HStack(spacing: 10) {
+                Text(selectedTitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .monospacedDigit()
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Ink.tertiary)
+            }
+            .padding(.horizontal, 9)
+            .frame(width: 76, height: 22)
+            .background {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(.white.opacity(scheme == .dark ? 0.08 : 0.55))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
+                    }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel(title)
+        .accessibilityValue(selectedTitle)
+    }
+}
+
+private struct GlassSegmentStyle: ButtonStyle {
+    let selected: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        GlassSegmentFace(selected: selected, pressed: configuration.isPressed) { configuration.label }
+    }
+}
+
+private struct GlassSegmentFace<Label: View>: View {
+    let selected: Bool
+    let pressed: Bool
+    @ViewBuilder var label: Label
+    @Environment(\.colorScheme) private var scheme
+    @StateObject private var hover = HoverState()
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+        label
+            .background {
+                if selected {
+                    shape.fill(.white.opacity(scheme == .dark ? 0.16 : 0.88))
+                        .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.07), radius: 2, y: 1)
+                        .overlay { shape.strokeBorder(.white.opacity(scheme == .dark ? 0.1 : 0.7), lineWidth: 0.5) }
+                } else {
+                    shape.fill(Color.primary.opacity(pressed ? 0.09 : hover.hovering ? 0.055 : 0.025))
+                        .overlay { shape.strokeBorder(Color.primary.opacity(0.065), lineWidth: 0.5) }
+                }
+            }
+            .opacity(pressed ? 0.75 : 1)
+            .onHover { hover.hovering = $0 }
+    }
+}
+
 struct SubtleButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         HoverHighlight(pressed: configuration.isPressed) { configuration.label }

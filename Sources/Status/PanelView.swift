@@ -17,6 +17,9 @@ struct PanelView: View {
             case .settings:
                 SettingsView()
                     .transition(pageTransition(from: .trailing))
+            case .network:
+                NetworkDetailView()
+                    .transition(pageTransition(from: .trailing))
             case .battery:
                 BatteryDetailView()
                     .transition(pageTransition(from: .trailing))
@@ -201,8 +204,27 @@ struct PanelView: View {
 
     private var networkCard: some View {
         let n = monitor.network
-        return Tile(title: "网络", symbol: "network", tint: Palette.down) {
-            Text(n.address ?? "未连接").monospacedDigit().textSelection(.enabled)
+        return Group {
+            if prefs.enableClaudeDiagnostics {
+                Button { prefs.page = .network } label: { networkTile(n) }
+                    .buttonStyle(CardButtonStyle())
+                    .help("查看 Claude 网络诊断")
+                    .accessibilityLabel("网络，查看 Claude 网络诊断")
+            } else {
+                networkTile(n)
+            }
+        }
+    }
+
+    private func networkTile(_ n: NetworkSnapshot) -> some View {
+        Tile(title: "网络", symbol: "network", tint: Palette.down) {
+            HStack(spacing: 5) {
+                Text(n.address ?? "未连接").monospacedDigit().textSelection(.enabled)
+                if prefs.enableClaudeDiagnostics {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+            }
         } content: {
             HStack(alignment: .firstTextBaseline) {
                 RateView(symbol: "arrow.down", tint: Palette.down, value: n.down)
@@ -293,14 +315,8 @@ private struct ProcessCard: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Ink.secondary)
                 Spacer()
-                Picker("", selection: $prefs.processSort) {
-                    Text("CPU").tag(Preferences.ProcessSort.cpu)
-                    Text("内存").tag(Preferences.ProcessSort.memory)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.mini)
-                .frame(width: 96)
+                GlassSegmentedControl("进程排序", selection: $prefs.processSort,
+                                      options: [(.cpu, "CPU"), (.memory, "内存")], height: 18)
             }
             VStack(spacing: 3) {
                 ForEach(rows) { row in
@@ -351,30 +367,16 @@ private struct SettingsView: View {
                 HStack {
                     Text("刷新间隔")
                     Spacer()
-                    Picker("", selection: $prefs.interval) {
-                        Text("1 秒").tag(1.0)
-                        Text("2 秒").tag(2.0)
-                        Text("3 秒").tag(3.0)
-                        Text("5 秒").tag(5.0)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .frame(width: 180)
+                    GlassChoiceMenu("刷新间隔", selection: $prefs.interval,
+                                    options: [(1, "1 秒"), (2, "2 秒"), (3, "3 秒"), (5, "5 秒")])
                 }
                 .frame(height: 24)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
                         Text("充电上限")
                         Spacer()
-                        Picker("", selection: $prefs.chargeLimit) {
-                            Text("自动").tag(0)
-                            ForEach([80, 85, 90, 95, 100], id: \.self) { Text("\($0)").tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .frame(width: 214)
+                        GlassChoiceMenu("充电上限", selection: $prefs.chargeLimit,
+                                        options: [(0, "自动"), (80, "80%"), (85, "85%"), (90, "90%"), (95, "95%"), (100, "100%")])
                     }
                     .frame(height: 24)
                     Text("只用于估算充电时间，不会改变实际充电。实际上限请在 系统设置 › 电池 中设置；“自动”使用系统自己的估计。")
@@ -404,6 +406,14 @@ private struct SettingsView: View {
                     }
                     .padding(.bottom, 4)
                 }
+            }
+            section("网络诊断") {
+                toggle("Claude IP 出口检测", "globe", $prefs.enableClaudeDiagnostics)
+                Text("关闭后隐藏诊断入口并停止检测，网速与流量统计照常显示。")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Ink.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 4)
             }
             about
         }

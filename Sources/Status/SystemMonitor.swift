@@ -3,8 +3,14 @@ import ServiceManagement
 
 @MainActor
 final class Preferences: ObservableObject {
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
+    @Published var enableClaudeDiagnostics: Bool {
+        didSet {
+            defaults.set(enableClaudeDiagnostics, forKey: "enableClaudeDiagnostics")
+            if !enableClaudeDiagnostics && page == .network { page = .overview }
+        }
+    }
     @Published var showCPU: Bool { didSet { defaults.set(showCPU, forKey: "showCPU") } }
     @Published var showMemory: Bool { didSet { defaults.set(showMemory, forKey: "showMemory") } }
     @Published var showGPU: Bool { didSet { defaults.set(showGPU, forKey: "showGPU") } }
@@ -19,15 +25,18 @@ final class Preferences: ObservableObject {
     /// 面板当前显示的页面（不持久化）
     @Published var page: Page = .overview
 
-    enum Page { case overview, settings, battery }
+    enum Page { case overview, settings, battery, network }
 
     enum ProcessSort: String, CaseIterable { case cpu, memory }
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         defaults.register(defaults: [
+            "enableClaudeDiagnostics": true,
             "showCPU": true, "showMemory": true, "showGPU": false,
             "showNetwork": true, "showBattery": false, "showTemperature": true, "interval": 2.0, "chargeLimit": 0,
         ])
+        enableClaudeDiagnostics = defaults.bool(forKey: "enableClaudeDiagnostics")
         showCPU = defaults.bool(forKey: "showCPU")
         showMemory = defaults.bool(forKey: "showMemory")
         showGPU = defaults.bool(forKey: "showGPU")

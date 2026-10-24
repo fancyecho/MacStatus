@@ -32,6 +32,7 @@ scripts/make-icon.sh  # regenerates the app icon (after editing scripts/make-ico
 
 - **Menu bar**: CPU, CPU temperature, memory, GPU, network speed and battery, each toggled independently. It is rendered as a template image, so it adapts to light and dark menu bars automatically.
 - **Panel**: a glass panel attached under the menu bar icon (Liquid Glass on macOS 26 and later, frosted glass on earlier versions). Click the icon to open or close it; clicking elsewhere or pressing Esc also closes it, and ⌘, opens settings. CPU (history curve, per-core bars, temperature), memory (app / wired / compressed / swap breakdown; a badge appears only when memory pressure is high), GPU, disk (free space, read/write speed), network (mirrored up/down chart), battery (health, cycle count, temperature, power draw), and top 5 processes by CPU or memory.
+- **Claude network diagnostics** (click the network card): the actual exit observed by `claude.ai/cdn-cgi/trace`, Net.Coffee reference trust score, residential / datacenter / mobile classification, country / city / ASN / operator, risk flags, and separate HTTPS checks for Claude web, Anthropic API, and the Anthropic website. It also flags differences between the web and API exits. The original live rates and traffic chart remain in the overview.
 - **Battery details** (click the battery card): time to full (or to the charge limit) / estimated time remaining, power flow (adapter input = computer consumption + power into the battery), computer power history, **apps using the most power** (estimated from the system's per-process CPU energy counters, with helper processes counted toward their app), max capacity / health, cycle count, temperature, voltage, current, and capacity in mAh. The battery turns yellow in Low Power Mode.
 - **Menu bar battery icon**: the percentage sits inside the battery, with a bolt beside it while charging and a yellow fill in Low Power Mode.
 
@@ -57,3 +58,37 @@ STATUS_DEMO=1 build/Status.app/Contents/MacOS/Status              # fills GPU / 
 /Applications/Status.app/Contents/MacOS/Status --battery-info   # prints the raw battery fields and how they were parsed (no serial numbers)
 /Applications/Status.app/Contents/MacOS/Status --check-update   # checks for updates once and prints the result
 ```
+
+## Claude network diagnostics
+
+The network card opens a native detail page using the same cards, typography, palette and glass panel as the rest of Status. Refresh manually or choose Off / 1 / 5 / 15 minutes (default: 5 minutes). Automatic checks only run while this page is open; leaving it or closing the panel cancels pending checks. IP hiding is remembered, and visible addresses can be copied.
+
+- **Exit measurement**: Status requests each target's `https://<host>/cdn-cgi/trace` with cache bypass. Only a valid IP in a trace with a matching host is accepted. A failed Claude trace remains unknown; another website's public IP is never substituted. The main score and properties apply to the Claude web exit. If the API exit differs, it is shown separately.
+- **IP intelligence**: the GET endpoints `https://ip.net.coffee/api/iprisk/<IP>` and `/api/geoip/<IP>` are those used by the [Net.Coffee Claude page](https://ip.net.coffee/claude/) (checked 2026-10-24). They are website endpoints, with no documented stability guarantee. The app sends the detected exit IP to this provider. DNS checks additionally use randomized subdomains under `d.ip.net.coffee` and its `/api/dns/result/<token>` endpoint. It does not load the page, its analytics, or its session-reporting code. No login, browser cookies or chat content are read.
+- **Scoring**: the score and 95 / 80 / 50 / 25 thresholds come from Net.Coffee. This is a third-party IP rating, not an Anthropic score or a promise of account safety. Status does not invent a score or replace the provider's score with a guessed regional penalty. Data unavailable, malformed or out of range stays unknown. Residential classification requires explicit data; a negative datacenter flag alone is not sufficient.
+- **Freshness and limits**: traces are requested afresh each time. Successfully fetched intelligence is cached in memory for 10 minutes for the same IP, with its original fetch time shown. A changed IP cannot inherit the previous IP's score. The provider may additionally cache its own data. A 429 response pauses intelligence retries for 10 minutes while connectivity checks continue.
+- **Availability**: the checks distinguish HTTP success, authentication required, forbidden/restricted access, rate limits, server errors, redirects, timeouts and connection failure. Durations measure the whole HTTPS request, not ICMP Ping. Receiving a response does not establish that login or an authenticated API call will work.
+- **Routing scope**: these are Status's requests using macOS networking. Per-app / per-process proxy rules can route Claude Desktop or Claude Code differently. The results are not a measurement of those processes. IPv6 remains enabled.
+
+Verification:
+
+```bash
+swift test
+build/Status.app/Contents/MacOS/Status --check-network
+STATUS_NETWORK_LIVE=1 STATUS_SNAPSHOT=/some/dir build/Status.app/Contents/MacOS/Status
+STATUS_PAGE=network STATUS_SHOW_PANEL=30 build/Status.app/Contents/MacOS/Status
+```
+
+`STATUS_NETWORK_FIXTURE=residential|ipv6|blocked|partial|unknown|zero` is an offline screenshot mode. It uses reserved documentation IPs, labels the page as a demo, and makes no diagnostic requests. Existing overview / battery / settings / menu bar snapshots are still produced; `network-light.png` and `network-dark.png` are added.
+
+### DNS / WebRTC and interface refinements
+
+- Settings → Network diagnostics → **Claude IP 出口检测** enables or disables the detail page. Disabling hides the entry and immediately cancels probes; local throughput monitoring continues normally. The choice is remembered (default: enabled).
+- DNS checks trigger two random hostnames, read the authoritative DNS observations, and show the actual resolver IPs. All observed resolvers receive region lookups through the site's batch endpoint (16 per request), with individual fallback and a one-hour in-memory region cache. Mainland China resolvers are flagged as leaks and shown first. Foreign-country differences alone are not flagged. Unknown regions keep the overall result unconfirmed. All observed IPs are retained and can be expanded in the UI. An empty result is unknown, not evidence of encrypted or leak-free DNS.
+- WebRTC checks create a short-lived, nonpersistent local WebKit document, then run an actual RTCPeerConnection data channel with Google / Cloudflare STUN. Only public UDP candidates are compared to the Claude exit. IPv4 and IPv6 are supported; local / private / documentation ranges are excluded correctly. The WebView and peer connection are released after completion or cancellation. No microphone or camera permission is requested. WebKit privacy policies or blocked STUN may yield no public candidate; the UI then explicitly says it cannot confirm the UDP exit.
+- Refresh intervals and charge-limit estimates use compact glass menus that show the current value and expand on click. Process sorting retains its compact buttons. Network auto-check timing is a compact menu in the title row. The network scroll viewport hides scroll indicators, retains normal scrolling, has rounded corners and fades only at overflowing edges; there is no fixed bottom control area.
+- Status now uses an AppKit menu-bar lifecycle with its existing SwiftUI panel. The former empty `Settings { EmptyView() }` scene is removed, so launch creates no empty settings window. Reopening the app shows the existing status panel.
+
+`STATUS_CHECK_STARTUP=1 build/Status.app/Contents/MacOS/Status` verifies that no app content window is visible immediately after launch (menu-bar icon windows are expected). `--check-network` also prints DNS and WebRTC results. Screenshots now include `settings-dark.png`.
+
+DNS labels use country/region codes: CN = 中国大陆, HK = 中国香港, MO = 中国澳门, TW = 中国台湾. Only CN triggers the mainland DNS rule. A mixed US/Singapore resolver set is therefore shown as 未检测到泄露, while any unresolved location remains 地区未完全确认. WebRTC still compares all public UDP candidates with the Claude exit; absent candidates remain unconfirmed.
