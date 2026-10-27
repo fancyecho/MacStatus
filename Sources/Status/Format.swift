@@ -45,19 +45,19 @@ enum Fmt {
     static func uptime(_ seconds: TimeInterval) -> String {
         let minutes = Int(seconds) / 60
         let days = minutes / 1440, hours = (minutes % 1440) / 60, mins = minutes % 60
-        if days > 0 { return "\(days) 天 \(hours) 小时" }
-        if hours > 0 { return "\(hours) 小时 \(mins) 分" }
-        return "\(mins) 分钟"
+        if days > 0 { return L("\(days) 天 \(hours) 小时", "\(days)d \(hours)h") }
+        if hours > 0 { return L("\(hours) 小时 \(mins) 分", "\(hours)h \(mins)m") }
+        return L("\(mins) 分钟", "\(mins) min")
     }
 
     /// 拆成 (数字, 单位) 便于大小字号排版，例如 [("1", "小时"), ("12", "分")]
     static func durationParts(_ total: Int) -> [(String, String)] {
         let hours = total / 60, mins = total % 60
-        if hours == 0 { return [("\(mins)", "分钟")] }
-        return mins == 0 ? [("\(hours)", "小时")] : [("\(hours)", "小时"), ("\(mins)", "分")]
+        if hours == 0 { return [("\(mins)", L("分钟", "min"))] }
+        return mins == 0 ? [("\(hours)", L("小时", "h"))] : [("\(hours)", L("小时", "h")), ("\(mins)", L("分", "m"))]
     }
 
     static func minutes(_ total: Int) -> String {
-        total >= 60 ? "\(total / 60):\(String(format: "%02d", total % 60))" : "\(total) 分钟"
+        total >= 60 ? "\(total / 60):\(String(format: "%02d", total % 60))" : L("\(total) 分钟", "\(total) min")
     }
 }

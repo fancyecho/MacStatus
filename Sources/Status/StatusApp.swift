@@ -11,6 +11,7 @@ enum StatusApp {
         }
         // The app already owns a status item and NSPanel; a SwiftUI Settings scene
         // would create a second, empty window when launched/reopened by Finder.
+        Typeface.registerBundledFonts()
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
         let delegate = AppDelegate()
@@ -43,16 +44,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
             button.action = #selector(togglePanel)
             button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+            button.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                                  owner: self, userInfo: nil))
         }
 
         panel = StatusPanel(rootView: PanelView()
             .environmentObject(monitor)
             .environmentObject(prefs)
             .environmentObject(networkDiagnostics))
+        // 打开时用已有的数据立刻重绘一次，和展开动画在同一帧开始
+        panel.onWillShow = { [weak self] in self?.monitor.objectWillChange.send() }
         panel.onVisibilityChange = { [weak self] visible in
             guard let self else { return }
-            self.monitor.panelVisible = visible
             self.statusItem.button?.highlight(visible)
+            if visible {
+                // 等展开动画基本结束再开始高频采样和刷新，避免重绘抢在动画前面造成卡顿
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                    guard let self, self.panel.isShown else { return }
+                    self.monitor.panelVisible = true
+                }
+            } else {
+                self.monitor.panelVisible = false
+            }
             // 打开面板时顺便看看是否该检查更新（每天最多一次），不需要额外的定时器
             if visible { UpdateChecker.shared.checkIfDue() }
             // 收起后回到概览页，下次打开总是先看到数据
@@ -136,6 +149,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !panel.isShown, let button = statusItem.button { panel.show(below: button) }
         return false
     }
+
+    /// 鼠标移到菜单栏图标上：预先采样，点击后面板可以立刻显示最新数据
+    @objc func mouseEntered(with event: NSEvent) {
+        monitor.prewarm()
+    }
+
+    @objc func mouseExited(with event: NSEvent) {}
 
     @objc private func togglePanel() {
         guard let button = statusItem.button else { return }

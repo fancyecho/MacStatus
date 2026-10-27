@@ -451,7 +451,7 @@ enum BatterySampler {
         if let name = adapter["Name"] as? String, !name.isEmpty {
             s.adapterName = name
         } else if let description = adapter["Description"] as? String, !description.isEmpty {
-            s.adapterName = description.lowercased().contains("pd") ? "USB-C 电源适配器" : description
+            s.adapterName = description.lowercased().contains("pd") ? L("USB-C 电源适配器", "USB-C Power Adapter") : description
         }
     }
 
@@ -510,43 +510,19 @@ enum BatterySampler {
 
 // MARK: - Processes
 
-/// 按应用汇总的耗电（Chrome 的各个 Helper 进程都算到 Chrome 头上）
-struct AppEnergy: Identifiable {
-    let id: String
-    let name: String
-    let icon: NSImage
-    let watts: Double      // 能耗计数可用时的平均功率（W）
-    let cpu: Double        // 占用的 CPU（100% = 一个核心）
-}
-
 struct ProcessSample {
     var byCPU: [ProcessEntry] = []
     var byMemory: [ProcessEntry] = []
-    var byEnergy: [AppEnergy] = []
-    /// 系统是否提供了每个进程的能耗计数（虚拟机、Intel 机器上没有，退回按 CPU 时间排序）
-    var energyAvailable = false
 }
 
 final class ProcessSampler {
-    private struct Counters {
-        var cpuTime: UInt64
-        var energy: UInt64
-    }
-
-    private var previous: [pid_t: Counters] = [:]
+    private var previous: [pid_t: UInt64] = [:]
     private var lastTime: UInt64 = 0
     private var identities: [pid_t: (name: String, icon: NSImage)] = [:]
     private var paths: [pid_t: String] = [:]
-    private var groups: [String: (name: String, icon: NSImage)] = [:]
     private static let genericIcon = NSWorkspace.shared.icon(for: .unixExecutable)
-    private static let timebase: Double = {
-        var info = mach_timebase_info_data_t()
-        mach_timebase_info(&info)
-        return Double(info.numer) / Double(info.denom)
-    }()
 
-    /// - Parameter groupByApp: 是否按应用汇总耗电（只在电池详情页需要，平时省掉路径查询）
-    func sample(limit: Int = 5, groupByApp: Bool = false) -> ProcessSample {
+    func sample(limit: Int = 5) -> ProcessSample {
         let capacity = Int(proc_listallpids(nil, 0)) + 32
         var pids = [pid_t](repeating: 0, count: capacity)
         let count = Int(proc_listallpids(&pids, Int32(capacity * MemoryLayout<pid_t>.size)))
@@ -554,9 +530,8 @@ final class ProcessSampler {
 
         let now = mach_absolute_time()
         let elapsed = lastTime == 0 ? 0 : Double(now - lastTime)
-        let elapsedSeconds = elapsed * Self.timebase / 1e9
-        var current: [pid_t: Counters] = [:]
-        var rows: [(pid: pid_t, cpu: Double, memory: UInt64, watts: Double)] = []
+        var current: [pid_t: UInt64] = [:]
+        var rows: [(pid: pid_t, cpu: Double, memory: UInt64)] = []
 
         for pid in pids.prefix(count) where pid > 0 {
             var info = rusage_info_v6()
@@ -566,49 +541,28 @@ final class ProcessSampler {
                 }
             }
             guard ok == 0 else { continue }
-            // CPU 时间和 mach_absolute_time 都是 mach 时间单位，直接相除即可；能耗单位是纳焦
-            let counters = Counters(cpuTime: info.ri_user_time + info.ri_system_time, energy: info.ri_energy_nj)
-            current[pid] = counters
-            var cpu = 0.0, watts = 0.0
-            if elapsed > 0, let prev = previous[pid] {
-                if counters.cpuTime >= prev.cpuTime { cpu = Double(counters.cpuTime - prev.cpuTime) / elapsed * 100 }
-                if counters.energy >= prev.energy, elapsedSeconds > 0 {
-                    watts = Double(counters.energy - prev.energy) / 1e9 / elapsedSeconds
-                }
+            // CPU 时间和 mach_absolute_time 都是 mach 时间单位，直接相除即可
+            let cpuTime = info.ri_user_time + info.ri_system_time
+            current[pid] = cpuTime
+            var cpu = 0.0
+            if elapsed > 0, let prev = previous[pid], cpuTime >= prev {
+                cpu = Double(cpuTime - prev) / elapsed * 100
             }
-            rows.append((pid, cpu, info.ri_phys_footprint, watts))
+            rows.append((pid, cpu, info.ri_phys_footprint))
         }
         previous = current
         lastTime = now
         identities = identities.filter { current[$0.key] != nil }
         paths = paths.filter { current[$0.key] != nil }
 
-        func entries(_ sorted: some Sequence<(pid: pid_t, cpu: Double, memory: UInt64, watts: Double)>) -> [ProcessEntry] {
+        func entries(_ sorted: some Sequence<(pid: pid_t, cpu: Double, memory: UInt64)>) -> [ProcessEntry] {
             sorted.prefix(limit).map { row in
                 let identity = identity(for: row.pid)
                 return ProcessEntry(id: row.pid, name: identity.name, icon: identity.icon, cpu: row.cpu, memory: row.memory)
             }
         }
-        var result = ProcessSample(byCPU: entries(rows.sorted { $0.cpu > $1.cpu }),
-                                   byMemory: entries(rows.sorted { $0.memory > $1.memory }))
-
-        if groupByApp, elapsed > 0 {
-            result.energyAvailable = rows.contains { $0.watts > 0 }
-            var totals: [String: (watts: Double, cpu: Double)] = [:]
-            for row in rows where row.cpu > 0 || row.watts > 0 {
-                let key = groupKey(for: row.pid)
-                totals[key, default: (0, 0)].watts += row.watts
-                totals[key, default: (0, 0)].cpu += row.cpu
-            }
-            let ranked = totals.sorted {
-                result.energyAvailable ? $0.value.watts > $1.value.watts : $0.value.cpu > $1.value.cpu
-            }
-            result.byEnergy = ranked.prefix(limit).map { key, value in
-                let group = groupIdentity(for: key)
-                return AppEnergy(id: key, name: group.name, icon: group.icon, watts: value.watts, cpu: value.cpu)
-            }
-        }
-        return result
+        return ProcessSample(byCPU: entries(rows.sorted { $0.cpu > $1.cpu }),
+                             byMemory: entries(rows.sorted { $0.memory > $1.memory }))
     }
 
     private func path(for pid: pid_t) -> String {
@@ -617,33 +571,6 @@ final class ProcessSampler {
         let path = proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 ? String(cString: buffer) : ""
         paths[pid] = path
         return path
-    }
-
-    /// 最外层的 .app 作为分组（Helper 进程归到主应用）；不在 .app 里的按可执行文件名分组
-    private func groupKey(for pid: pid_t) -> String {
-        let path = path(for: pid)
-        if let range = path.range(of: ".app/") {
-            return String(path[..<range.lowerBound]) + ".app"
-        }
-        if !path.isEmpty { return path }
-        var short = [CChar](repeating: 0, count: 64)
-        proc_name(pid, &short, UInt32(short.count))
-        return "proc:" + String(cString: short)
-    }
-
-    private func groupIdentity(for key: String) -> (name: String, icon: NSImage) {
-        if let cached = groups[key] { return cached }
-        let identity: (String, NSImage)
-        if key.hasSuffix(".app") {
-            identity = (FileManager.default.displayName(atPath: key).replacingOccurrences(of: ".app", with: ""),
-                        NSWorkspace.shared.icon(forFile: key))
-        } else if key.hasPrefix("proc:") {
-            identity = (String(key.dropFirst(5)), Self.genericIcon)
-        } else {
-            identity = ((key as NSString).lastPathComponent, Self.genericIcon)
-        }
-        groups[key] = identity
-        return identity
     }
 
     private func identity(for pid: pid_t) -> (name: String, icon: NSImage) {
@@ -771,7 +698,8 @@ final class TemperatureSampler {
         }
         // M1/M2 有按核心簇划分的 pACC/eACC 传感器；较新的芯片退回到芯片核心温度 (tdie)
         cpuSensors = accSensors.isEmpty ? dieSensors : accSensors
-        cpuSource = accSensors.isEmpty ? "芯片 die 温度传感器 (PMU tdie)" : "CPU 核心簇传感器 (pACC/eACC)"
+        cpuSource = accSensors.isEmpty ? L("芯片 die 温度传感器 (PMU tdie)", "chip die sensors (PMU tdie)")
+                : L("CPU 核心簇传感器 (pACC/eACC)", "CPU cluster sensors (pACC/eACC)")
     }
 
     var isAvailable: Bool { !cpuSensors.isEmpty }

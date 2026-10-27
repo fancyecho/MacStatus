@@ -21,6 +21,27 @@ final class Preferences: ObservableObject {
     /// 充电上限：0 = 自动（跟随系统的估计）；80–100 = 手动，只用于估算充电时间和显示"已达上限"，不会改变实际充电
     @Published var chargeLimit: Int { didSet { defaults.set(chargeLimit, forKey: "chargeLimit") } }
     @Published var processSort: ProcessSort { didSet { defaults.set(processSort.rawValue, forKey: "processSort") } }
+    /// 系统通知提醒
+    @Published var alertLowBattery: Bool { didSet { defaults.set(alertLowBattery, forKey: "alertLowBattery") } }
+    @Published var alertHot: Bool { didSet { defaults.set(alertHot, forKey: "alertHot") } }
+    @Published var alertMemory: Bool { didSet { defaults.set(alertMemory, forKey: "alertMemory") } }
+    @Published var alertDisk: Bool { didSet { defaults.set(alertDisk, forKey: "alertDisk") } }
+    @Published var alertRunaway: Bool { didSet { defaults.set(alertRunaway, forKey: "alertRunaway") } }
+
+    @Published var font: AppFont {
+        didSet {
+            Typeface.current = font
+            defaults.set(font.rawValue, forKey: "font")
+        }
+    }
+    @Published var language: AppLanguage {
+        didSet {
+            Lang.setting = language
+            defaults.set(language.rawValue, forKey: "language")
+        }
+    }
+
+    var anyAlertEnabled: Bool { alertLowBattery || alertHot || alertMemory || alertDisk || alertRunaway }
 
     /// 面板当前显示的页面（不持久化）
     @Published var page: Page = .overview
@@ -35,6 +56,7 @@ final class Preferences: ObservableObject {
             "enableClaudeDiagnostics": true,
             "showCPU": true, "showMemory": true, "showGPU": false,
             "showNetwork": true, "showBattery": false, "showTemperature": true, "interval": 2.0, "chargeLimit": 0,
+            "alertLowBattery": true, "alertHot": true, "alertMemory": true, "alertDisk": true, "alertRunaway": true,
         ])
         enableClaudeDiagnostics = defaults.bool(forKey: "enableClaudeDiagnostics")
         showCPU = defaults.bool(forKey: "showCPU")
@@ -46,6 +68,15 @@ final class Preferences: ObservableObject {
         interval = defaults.double(forKey: "interval")
         chargeLimit = defaults.integer(forKey: "chargeLimit")
         processSort = ProcessSort(rawValue: defaults.string(forKey: "processSort") ?? "") ?? .cpu
+        alertLowBattery = defaults.bool(forKey: "alertLowBattery")
+        alertHot = defaults.bool(forKey: "alertHot")
+        alertMemory = defaults.bool(forKey: "alertMemory")
+        alertDisk = defaults.bool(forKey: "alertDisk")
+        alertRunaway = defaults.bool(forKey: "alertRunaway")
+        font = AppFont(rawValue: defaults.string(forKey: "font") ?? "") ?? .geist
+        language = AppLanguage(rawValue: defaults.string(forKey: "language") ?? "") ?? .system
+        Typeface.current = font
+        Lang.setting = language
     }
 
     var launchAtLogin: Bool {
@@ -56,7 +87,7 @@ final class Preferences: ObservableObject {
                 if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
                 loginItemError = nil
             } catch {
-                loginItemError = "设置失败：\(error.localizedDescription)"
+                loginItemError = L("设置失败：", "Couldn't change it: ") + error.localizedDescription
             }
         }
     }
@@ -119,8 +150,6 @@ final class SystemMonitor: ObservableObject {
     private(set) var temperature: TemperatureSnapshot?
     private(set) var topByCPU: [ProcessEntry] = []
     private(set) var topByMemory: [ProcessEntry] = []
-    private(set) var topByEnergy: [AppEnergy] = []
-    private(set) var energyAvailable = false
     private(set) var uptime: TimeInterval = 0
     private(set) var loadAverage: [Double] = []
 
@@ -136,14 +165,30 @@ final class SystemMonitor: ObservableObject {
     private var lastGPUPush: TimeInterval = 0
     private(set) var batteryPowerHistory: [Double] = []
 
+    /// 最近 24 小时的电量（持久化）
+    let batteryHistory = SystemMonitor.demoMode ? BatteryHistory.demo() : BatteryHistory()
+    private(set) var peripherals: [PeripheralBattery] = []
+    private(set) var wifi: WiFiSnapshot?
+    private(set) var latency: LatencySnapshot?
+    let alerts: AlertMonitor
+    private var lastLatencySample: TimeInterval = -.infinity
+    private var lastPeripheralSample: TimeInterval = -.infinity
+    private var lastFullTick: TimeInterval = -.infinity
+    private var peripheralWatcher: PeripheralWatcher?
+    private var latencyLoading = false
+    private var peripheralsLoading = false
+
     var panelVisible = false {
         didSet {
             guard panelVisible != oldValue else { return }
             if panelVisible {
                 // 面板关闭时进程、磁盘等不采样；打开时立即刷新一次，
                 // 再在 1 秒后补一次，让进程占用、读写速度反映的是"现在"而不是关闭期间的平均
-                tick(full: true)
-                objectWillChange.send()
+                // 鼠标移到菜单栏图标上时已经预先采过一次的话，这里不再重复
+                if ProcessInfo.processInfo.systemUptime - lastFullTick > 1.5 {
+                    tick(full: true)
+                    objectWillChange.send()
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
                     MainActor.assumeIsolated {
                         guard let self, self.panelVisible else { return }
@@ -166,6 +211,9 @@ final class SystemMonitor: ObservableObject {
 
     init(prefs: Preferences) {
         self.prefs = prefs
+        alerts = AlertMonitor(prefs: prefs)
+        alerts.requestAuthorizationIfNeeded()
+        peripheralWatcher = PeripheralWatcher { [weak self] in self?.peripheralsChanged() }
         start()
     }
 
@@ -183,7 +231,15 @@ final class SystemMonitor: ObservableObject {
         }
     }
 
+    /// 鼠标移到菜单栏图标上时调用：趁用户还没点下去，先把进程、磁盘等面板才用的数据采好，
+    /// 这样点击后面板可以立刻展开，不用先等一次采样
+    func prewarm() {
+        guard !panelVisible, ProcessInfo.processInfo.systemUptime - lastFullTick > 1.5 else { return }
+        tick(full: true)
+    }
+
     private func tick(full: Bool = false) {
+        if full { lastFullTick = ProcessInfo.processInfo.systemUptime }
         let first = tickCount == 0
         let active = full || panelVisible
         // CPU、内存、网速很便宜，且历史曲线需要连续数据，始终采样
@@ -195,27 +251,42 @@ final class SystemMonitor: ObservableObject {
         if active || prefs.showGPU {
             gpu = GPUSampler.sample()
         }
-        if active {
+        // 面板关着时，提醒需要的数据隔一段时间采一次：磁盘约每分钟、进程约每 30 秒
+        let alertTicks = max(1, Int((30 / prefs.interval).rounded()))
+        if active || (prefs.alertDisk && tickCount % (alertTicks * 2) == 0) {
             disk = diskSampler.sample()
-            let processes = processSampler.sample(groupByApp: prefs.page == .battery)
+        }
+        var sampledProcesses: [ProcessEntry]?
+        if active || (prefs.alertRunaway && tickCount % alertTicks == 0) {
+            let processes = processSampler.sample()
             topByCPU = processes.byCPU
             topByMemory = processes.byMemory
-            topByEnergy = processes.byEnergy
-            energyAvailable = processes.energyAvailable
+            sampledProcesses = processes.byCPU
+        }
+        if active {
+            wifi = WiFiSampler.sample()
+            refreshSlowSamplers(force: full)
         }
         // 电池：面板打开时每次都采（详情页看实时功率），关闭时每 5 次采一次（菜单栏电量、充电时间估算）
         if active || tickCount % 5 == 0 {
             battery = BatterySampler.sample()
-            if let battery { recordPower(battery, chart: active && !full) }
+            if let battery {
+                recordPower(battery, chart: active && !full)
+                if !Self.demoMode { batteryHistory.record(percent: battery.percent, charging: battery.isCharging) }
+            }
             batteryEstimate = battery.map(estimate)
         }
-        // 温度：菜单栏显示时每两次采一次就够了
-        if active || (prefs.showTemperature && tickCount % 2 == 0) {
+        // 温度：菜单栏显示或打开了过热提醒时每两次采一次就够了
+        if active || ((prefs.showTemperature || prefs.alertHot) && tickCount % 2 == 0) {
             temperature = temperatureSampler.sample()
         }
         uptime = SystemInfo.uptime
         loadAverage = SystemInfo.loadAverage
         if Self.demoMode { applyDemoData() }
+        if !first {
+            alerts.evaluate(battery: battery, temperature: temperature?.cpu, memoryPressure: memory.pressureLevel,
+                            disk: disk, processes: sampledProcesses)
+        }
 
         // 第一次采样没有差值，不计入历史；额外的刷新也不计入，保持时间轴均匀
         if !first && !full {
@@ -245,6 +316,53 @@ final class SystemMonitor: ObservableObject {
         ))
     }
 
+    /// 延迟测量和外设电量是阻塞调用，放到后台：延迟约每 4 秒一次，外设约每分钟一次（打开面板时立即刷新）
+    private func refreshSlowSamplers(force: Bool) {
+        let now = ProcessInfo.processInfo.systemUptime
+        if !latencyLoading, force || now - lastLatencySample >= 4 {
+            latencyLoading = true
+            lastLatencySample = now
+            DispatchQueue.global(qos: .utility).async {
+                let result = LatencySampler.sample()
+                DispatchQueue.main.async { [weak self] in
+                    MainActor.assumeIsolated {
+                        self?.latency = result
+                        self?.latencyLoading = false
+                    }
+                }
+            }
+        }
+        // 面板打开时每 10 秒看一次；连接 / 断开外设由 PeripheralWatcher 立即触发
+        if force || now - lastPeripheralSample >= 10 { refreshPeripherals() }
+    }
+
+    /// 外设连接或断开：系统写入电量信息可能慢一两秒，所以分几次读
+    private func peripheralsChanged() {
+        for delay in [0.5, 2.5, 6.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                MainActor.assumeIsolated { self?.refreshPeripherals() }
+            }
+        }
+    }
+
+    private func refreshPeripherals() {
+        guard !peripheralsLoading else { return }
+        peripheralsLoading = true
+        lastPeripheralSample = ProcessInfo.processInfo.systemUptime
+        DispatchQueue.global(qos: .utility).async {
+            let result = PeripheralSampler.sample()
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.peripheralsLoading = false
+                    guard result != self.peripherals else { return }
+                    self.peripherals = result
+                    if self.panelVisible { self.objectWillChange.send() }
+                }
+            }
+        }
+    }
+
     /// STATUS_DEMO=1：用模拟的 GPU / 温度 / 电池数据填充界面，便于在没有这些传感器的机器上检查布局
     private static let demoMode = ProcessInfo.processInfo.environment["STATUS_DEMO"] != nil
 
@@ -252,7 +370,7 @@ final class SystemMonitor: ObservableObject {
         gpu = Double.random(in: 4...45)
         let cpuTemp = Double.random(in: 52...60)
         temperature = TemperatureSnapshot(cpu: cpuTemp, cpuMax: cpuTemp + 7, cpuSensorCount: 10,
-                                          cpuSource: "演示数据", gpu: cpuTemp - 4)
+                                          cpuSource: L("演示数据", "demo data"), gpu: cpuTemp - 4)
         // 故意让数值的位数来回跳，检查卡片高度是否稳定
         let wide = tickCount % 2 == 0
         disk.read = wide ? 123_400_000 : 820
@@ -262,7 +380,7 @@ final class SystemMonitor: ObservableObject {
         var b = BatterySnapshot(percent: 78, isCharging: wide, onAC: wide, minutesRemaining: wide ? 72 : 312,
                                 health: 92, cycles: 312, designCycles: 1000, temperature: 31.4,
                                 currentCapacity: 3420, fullCapacity: 4210, designCapacity: 4563,
-                                voltage: 12.61, adapterWatts: wide ? 35 : nil, adapterName: wide ? "USB-C 电源适配器" : nil)
+                                voltage: 12.61, adapterWatts: wide ? 35 : nil, adapterName: wide ? L("USB-C 电源适配器", "USB-C Power Adapter") : nil)
         b.batteryPower = wide ? 18.6 : -system
         b.amperage = (b.batteryPower ?? 0) / 12.61
         b.systemPower = system
@@ -272,16 +390,6 @@ final class SystemMonitor: ObservableObject {
         battery = b
         recordPower(b, chart: true)
         batteryEstimate = estimate(b)
-        energyAvailable = true
-        let apps: [(String, String, Double)] = [
-            ("/System/Applications/Music.app", "音乐", 2.4), ("/System/Library/CoreServices/Finder.app", "访达", 1.1),
-            ("/System/Applications/Mail.app", "邮件", 0.62), ("/System/Applications/Photos.app", "照片", 0.35),
-            ("/System/Applications/Notes.app", "备忘录", 0.08),
-        ]
-        topByEnergy = apps.map { path, name, watts in
-            AppEnergy(id: path, name: name, icon: NSWorkspace.shared.icon(forFile: path),
-                      watts: watts * Double.random(in: 0.85...1.15), cpu: watts * 9)
-        }
     }
 
     /// 优先用系统的估计；系统还在"计算中"或设置了充电上限时，用最近约一分钟的平均功率推算：

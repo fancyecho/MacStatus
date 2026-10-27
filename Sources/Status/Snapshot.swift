@@ -25,7 +25,7 @@ enum Snapshot {
             return
         }
         if let seconds = env["STATUS_SHOW_PANEL"].flatMap(Double.init) {
-            showPanelForCapture(panel: panel, statusItem: statusItem, seconds: seconds)
+            showPanelForCapture(panel: panel, statusItem: statusItem, prefs: prefs, seconds: seconds)
             return
         }
         guard let dir = env["STATUS_SNAPSHOT"] else { return }
@@ -73,20 +73,35 @@ enum Snapshot {
         }
     }
 
-    /// 只打开面板、不模拟点击，停留若干秒后退出，方便截屏检查真实的玻璃效果
-    private static func showPanelForCapture(panel: StatusPanel, statusItem: NSStatusItem, seconds: Double) {
+    /// 只打开面板、不模拟点击，停留若干秒后退出，方便截屏检查真实的玻璃效果。
+    /// STATUS_PAGES=battery,overview：打开后每隔 STATUS_PAGE_EVERY 秒（默认 2）依次切到这些页面，用来检查切换动画
+    private static func showPanelForCapture(panel: StatusPanel, statusItem: NSStatusItem, prefs: Preferences, seconds: Double) {
+        let env = ProcessInfo.processInfo.environment
         // STATUS_APPEARANCE=dark/light：不改系统设置也能检查两种外观
-        switch ProcessInfo.processInfo.environment["STATUS_APPEARANCE"] {
+        switch env["STATUS_APPEARANCE"] {
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
         case "light": NSApp.appearance = NSAppearance(named: .aqua)
         default: break
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             guard let button = statusItem.button else { return }
+            print("opening")
+            fflush(stdout)
             panel.show(below: button)
+            let pages: [String: Preferences.Page] = ["overview": .overview, "battery": .battery,
+                                                     "settings": .settings, "network": .network]
+            let every = Double(env["STATUS_PAGE_EVERY"] ?? "") ?? 2
+            let sequence = (env["STATUS_PAGES"] ?? "").split(separator: ",").compactMap { pages[String($0)] }
+            for (index, page) in sequence.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + every * Double(index + 1)) {
+                    print("page=\(page)")
+                    fflush(stdout)
+                    prefs.page = page
+                }
+            }
             // 等打开动画和内容高度调整结束后再报告位置
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                print("panel=\(panel.frame) window=\(panel.windowNumber)")
+                print("panel=\(panel.panelFrame) window=\(panel.windowNumber)")
                 fflush(stdout)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { exit(0) }
@@ -99,7 +114,7 @@ enum Snapshot {
             return window.convertToScreen(button.convert(button.bounds, to: nil))
         }
         func describe(_ label: String) {
-            print("\(label): icon=\(anchor()) panel=\(panel.frame) gapToIcon=\(anchor().minY - panel.frame.maxY) shown=\(panel.isShown)")
+            print("\(label): icon=\(anchor()) panel=\(panel.panelFrame) gapToIcon=\(anchor().minY - panel.panelFrame.maxY) shown=\(panel.isShown)")
         }
         /// 模拟一次真实的鼠标点击（需要辅助功能权限，没有权限时事件会被系统丢弃）
         func click(at point: NSPoint) {
@@ -117,7 +132,7 @@ enum Snapshot {
             panel.show(below: button)
             var heights: [CGFloat] = []
             for i in 1...6 {
-                after(Double(i) * 1.1) { heights.append(panel.frame.height) }
+                after(Double(i) * 1.1) { heights.append(panel.panelFrame.height) }
             }
             after(7.5) {
                 describe("overview")
@@ -126,7 +141,7 @@ enum Snapshot {
             }
             var batteryHeights: [CGFloat] = []
             for i in 1...5 {
-                after(7.5 + Double(i) * 1.1) { batteryHeights.append(panel.frame.height) }
+                after(7.5 + Double(i) * 1.1) { batteryHeights.append(panel.panelFrame.height) }
             }
             after(14) {
                 print("battery page heights: \(batteryHeights)")
@@ -139,7 +154,7 @@ enum Snapshot {
                         describe("after clicking icon while open")
                         click(at: NSPoint(x: anchor().midX, y: anchor().midY))
                         for t in [0.1, 0.3, 0.6, 1.2, 2.0] {
-                            after(t) { print("  reopen +\(t)s: y=\(panel.frame.minY) h=\(panel.frame.height) gap=\(anchor().minY - panel.frame.maxY)") }
+                            after(t) { print("  reopen +\(t)s: y=\(panel.panelFrame.minY) h=\(panel.panelFrame.height) gap=\(anchor().minY - panel.panelFrame.maxY)") }
                         }
                         after(2.2) {
                             describe("after clicking icon again")

@@ -41,16 +41,16 @@ struct ClaudeProbe: Equatable, Identifiable {
 
         var title: String {
             switch self {
-            case .reachable: "可达"
-            case .authentication: "需要认证"
-            case .restricted: "访问受限"
-            case .limited: "请求受限"
-            case .serverError: "服务异常"
-            case .httpError: "HTTP 异常"
-            case .redirected: "已重定向"
-            case .timedOut: "超时"
-            case .offline: "未连接"
-            case .failed: "检测失败"
+            case .reachable: L("可达", "Reachable")
+            case .authentication: L("需要认证", "Needs sign-in")
+            case .restricted: L("访问受限", "Restricted")
+            case .limited: L("请求受限", "Rate limited")
+            case .serverError: L("服务异常", "Server error")
+            case .httpError: L("HTTP 异常", "HTTP error")
+            case .redirected: L("已重定向", "Redirected")
+            case .timedOut: L("超时", "Timed out")
+            case .offline: L("未连接", "Offline")
+            case .failed: L("检测失败", "Failed")
             }
         }
 
@@ -78,7 +78,8 @@ struct ClaudeProbe: Equatable, Identifiable {
         var parts = [status.title]
         if let httpStatus { parts.append("HTTP \(httpStatus)") }
         if let detail { parts.append(detail) }
-        parts.append("耗时是本次 HTTPS 请求的总耗时，包含连接和响应，不是 ICMP Ping。可达不代表已登录或账户可用。")
+        parts.append(L("耗时是本次 HTTPS 请求的总耗时，包含连接和响应，不是 ICMP Ping。可达不代表已登录或账户可用。",
+                       "The time is the whole HTTPS request, including connecting and the response; it is not an ICMP ping. Reachable doesn't mean signed in or that the account works."))
         return parts.joined(separator: "\n")
     }
 }
@@ -91,6 +92,16 @@ struct ClaudeIPRisk: Decodable, Equatable {
         case mobile = "移动网络"
         case unknown = "未知"
         case conflicting = "信息不一致"
+
+        var title: String {
+            switch self {
+            case .residential: L("家庭住宅", "Residential")
+            case .datacenter: L("机房", "Data center")
+            case .mobile: L("移动网络", "Mobile")
+            case .unknown: L("未知", "Unknown")
+            case .conflicting: L("信息不一致", "Conflicting")
+            }
+        }
     }
 
     var ip: String?
@@ -120,13 +131,13 @@ struct ClaudeIPRisk: Decodable, Equatable {
     }
 
     var scoreLabel: String {
-        guard let trustScore else { return "暂无评分" }
+        guard let trustScore else { return L("暂无评分", "No score") }
         switch trustScore {
-        case 95...: return "极度纯净"
-        case 80..<95: return "纯净"
-        case 50..<80: return "良好"
-        case 25..<50: return "中性"
-        default: return "可疑"
+        case 95...: return L("极度纯净", "Very clean")
+        case 80..<95: return L("纯净", "Clean")
+        case 50..<80: return L("良好", "Good")
+        case 25..<50: return L("中性", "Neutral")
+        default: return L("可疑", "Suspicious")
         }
     }
 
@@ -185,7 +196,7 @@ struct ClaudeNetworkResult: Equatable {
 
     var country: String {
         if let value = geo?.country ?? risk?.country, !value.isEmpty { return value }
-        guard let code = countryCode else { return "未知" }
+        guard let code = countryCode else { return L("未知", "Unknown") }
         return Locale(identifier: "zh_CN").localizedString(forRegionCode: code.uppercased()) ?? code.uppercased()
     }
 
@@ -231,7 +242,7 @@ actor ClaudeNetworkClient {
             if let cachedRisk, ClaudeExit.sameIP(cachedRisk.ip, exit.ip), Date().timeIntervalSince(cachedRisk.date) < 600 {
                 risk = cachedRisk.risk; geo = cachedRisk.geo; fetchedAt = cachedRisk.date; usedCache = true
             } else if let riskRetryAfter, riskRetryAfter > Date() {
-                riskError = "数据源请求受限，稍后自动重试"
+                riskError = L("数据源请求受限，稍后自动重试", "The data source is rate limiting; it will retry automatically")
             } else {
                 async let riskReply: Result<ClaudeIPRisk, Error> = fetchRisk(exit.ip)
                 async let geoReply: ClaudeIPGeo? = fetchGeo(exit.ip)
@@ -241,7 +252,7 @@ actor ClaudeNetworkClient {
                 case .success(let value):
                     // Never attach another exit's risk to the freshly detected IP.
                     if let returnedIP = value.ip, !ClaudeExit.sameIP(returnedIP, exit.ip) {
-                        riskError = "数据源返回的 IP 与本次出口不一致"
+                        riskError = L("数据源返回的 IP 与本次出口不一致", "The data source returned a different IP than this exit")
                     } else {
                         risk = value; fetchedAt = Date()
                         cachedRisk = (exit.ip, value, geo, fetchedAt!)
@@ -267,7 +278,7 @@ actor ClaudeNetworkClient {
         var lastError: String?
         var ips: [String] = []
         for attempt in 0..<2 {
-            guard !Task.isCancelled else { return DNSLeakResult(checkedAt: Date(), error: "已取消") }
+            guard !Task.isCancelled else { return DNSLeakResult(checkedAt: Date(), error: L("已取消", "Cancelled")) }
             do {
                 try await Task.sleep(for: dnsPollDelay)
                 let url = URL(string: "https://ip.net.coffee/api/dns/result/\(token)")!
@@ -281,8 +292,8 @@ actor ClaudeNetworkClient {
                 lastError = nil
                 if !ips.isEmpty { break }
             } catch {
-                if Task.isCancelled { return DNSLeakResult(checkedAt: Date(), error: "已取消") }
-                lastError = "DNS 检测服务暂不可用，请稍后重试"
+                if Task.isCancelled { return DNSLeakResult(checkedAt: Date(), error: L("已取消", "Cancelled")) }
+                lastError = L("DNS 检测服务暂不可用，请稍后重试", "The DNS check service is unavailable, try again later")
             }
             if attempt == 1 { break }
         }
@@ -361,11 +372,11 @@ actor ClaudeNetworkClient {
 
     private static func dataErrorText(_ error: Error) -> String {
         switch error {
-        case DataError.http(429): "数据源请求受限，稍后重试"
-        case DataError.http(let code): "数据源暂不可用（HTTP \(code)）"
-        case is DecodingError, DataError.invalid: "数据源格式变化，暂无法读取"
-        case let error as URLError where error.code == .timedOut: "IP 情报查询超时"
-        default: "IP 情报查询失败，请稍后重试"
+        case DataError.http(429): L("数据源请求受限，稍后重试", "The data source is rate limiting, try again later")
+        case DataError.http(let code): L("数据源暂不可用（HTTP \(code)）", "The data source is unavailable (HTTP \(code))")
+        case is DecodingError, DataError.invalid: L("数据源格式变化，暂无法读取", "The data source changed its format and can't be read")
+        case let error as URLError where error.code == .timedOut: L("IP 情报查询超时", "The IP lookup timed out")
+        default: L("IP 情报查询失败，请稍后重试", "The IP lookup failed, try again later")
         }
     }
 
@@ -386,7 +397,7 @@ actor ClaudeNetworkClient {
                 ? ClaudeExit.parse(String(decoding: data, as: UTF8.self), host: host) : nil
             return ClaudeProbe(host: host, status: status, httpStatus: http.statusCode,
                                milliseconds: milliseconds, exit: trace,
-                               detail: status == .reachable && trace == nil ? "已收到响应，但没有可验证的出口 IP。" : nil)
+                               detail: status == .reachable && trace == nil ? L("已收到响应，但没有可验证的出口 IP。", "Got a response, but no exit IP that can be verified.") : nil)
         } catch {
             let urlError = error as? URLError
             let status: ClaudeProbe.Status

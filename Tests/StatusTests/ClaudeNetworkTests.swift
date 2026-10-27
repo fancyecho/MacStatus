@@ -3,6 +3,12 @@ import XCTest
 @testable import Status
 
 final class ClaudeNetworkTests: XCTestCase {
+    // 断言里用的是中文文案，固定界面语言，结果不随系统语言变化
+    override func setUp() {
+        super.setUp()
+        Lang.setting = .chinese
+    }
+
     private let ip = "203.0.113.42"
 
     func testTraceRequiresMatchingHostAndValidAddress() {

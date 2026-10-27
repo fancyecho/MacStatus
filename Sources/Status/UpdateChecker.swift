@@ -66,7 +66,7 @@ final class UpdateChecker: ObservableObject {
                 defaults.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
                 state = Self.isNewer(release.version, than: currentVersion) ? .available(release) : .upToDate
             } catch {
-                state = .failed("检查失败，请稍后再试")
+                state = .failed(L("检查失败，请稍后再试", "Check failed, try again later"))
             }
         }
     }

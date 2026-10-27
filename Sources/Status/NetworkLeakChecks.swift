@@ -24,11 +24,11 @@ struct DNSObservedAddress: Equatable, Identifiable {
     }
 
     var regionLabel: String {
-        guard let code = normalizedCountryCode else { return "地区未知" }
-        if code == "CN" { return "中国大陆" }
-        if code == "HK" { return "中国香港" }
-        if code == "MO" { return "中国澳门" }
-        if code == "TW" { return "中国台湾" }
+        guard let code = normalizedCountryCode else { return L("地区未知", "Unknown region") }
+        if code == "CN" { return L("中国大陆", "Mainland China") }
+        if code == "HK" { return L("中国香港", "Hong Kong") }
+        if code == "MO" { return L("中国澳门", "Macao") }
+        if code == "TW" { return L("中国台湾", "Taiwan") }
         return Locale(identifier: "zh_CN").localizedString(forRegionCode: code) ?? country ?? code
     }
 }
@@ -51,22 +51,26 @@ struct DNSLeakResult: Equatable {
 
     func assessment(comparedTo exit: ClaudeExit?) -> LeakAssessment {
         guard !addresses.isEmpty else {
-            return LeakAssessment(status: error == nil ? .unknown : .failed, title: "未获取解析出口",
-                                  detail: error ?? "未观测到解析记录，暂时无法判断是否存在中国大陆 DNS 泄露。")
+            return LeakAssessment(status: error == nil ? .unknown : .failed, title: L("未获取解析出口", "No resolvers seen"),
+                                  detail: error ?? L("未观测到解析记录，暂时无法判断是否存在中国大陆 DNS 泄露。",
+                                                     "No resolvers were observed, so a mainland China DNS leak can't be ruled out yet."))
         }
         // This page's criterion is mainland-China resolvers, not a mismatch
         // between two foreign countries (e.g. US HTTPS and Singapore DNS).
         if addresses.contains(where: { $0.normalizedCountryCode == "CN" }) {
-            return LeakAssessment(status: .different, title: "检测到泄露",
-                                  detail: "本次随机域名查询观测到了中国大陆 DNS 解析器，按本页的大陆 DNS 检测标准标记为泄露。相关解析器已置顶显示。")
+            return LeakAssessment(status: .different, title: L("检测到泄露", "Leak detected"),
+                                  detail: L("本次随机域名查询观测到了中国大陆 DNS 解析器，按本页的大陆 DNS 检测标准标记为泄露。相关解析器已置顶显示。",
+                                            "A mainland China DNS resolver answered this random-domain query, which this page counts as a leak. Those resolvers are listed first."))
         }
         let unknown = addresses.filter { $0.normalizedCountryCode == nil }.count
         if unknown > 0 {
-            return LeakAssessment(status: .unknown, title: "地区未完全确认",
-                                  detail: "已确认的解析器中未发现中国大陆 DNS；尚有 \(unknown) 个解析器地区未知，暂时无法排除。")
+            return LeakAssessment(status: .unknown, title: L("地区未完全确认", "Regions not fully confirmed"),
+                                  detail: L("已确认的解析器中未发现中国大陆 DNS；尚有 \(unknown) 个解析器地区未知，暂时无法排除。",
+                                            "None of the identified resolvers are in mainland China, but \(unknown) have an unknown region, so a leak can't be ruled out."))
         }
-        return LeakAssessment(status: .matching, title: "未检测到泄露",
-                              detail: "本次观测的解析器均未被标记为中国大陆。美国、新加坡等境外地区之间的差异不计为大陆 DNS 泄露；结论仅对应此次检测。")
+        return LeakAssessment(status: .matching, title: L("未检测到泄露", "No leak detected"),
+                              detail: L("本次观测的解析器均未被标记为中国大陆。美国、新加坡等境外地区之间的差异不计为大陆 DNS 泄露；结论仅对应此次检测。",
+                                        "None of the observed resolvers are in mainland China. Differences between other regions, such as the US and Singapore, don't count. This only covers this check."))
     }
 
 }
@@ -93,18 +97,22 @@ struct WebRTCLeakResult: Equatable {
     func assessment(comparedTo exit: ClaudeExit?) -> LeakAssessment {
         guard !publicIPs.isEmpty else {
             return LeakAssessment(status: error == nil ? .unknown : .failed,
-                                  title: error == nil ? "未获取公网候选" : "检测不可用",
-                                  detail: error ?? "WebKit 隐私策略、UDP/STUN 限制或超时都可能导致没有公网候选，不能据此断言没有泄露。")
+                                  title: error == nil ? L("未获取公网候选", "No public candidates") : L("检测不可用", "Check unavailable"),
+                                  detail: error ?? L("WebKit 隐私策略、UDP/STUN 限制或超时都可能导致没有公网候选，不能据此断言没有泄露。",
+                                                     "WebKit privacy rules, blocked UDP/STUN or a timeout can all hide public candidates, so this doesn't prove there is no leak."))
         }
         guard let exit else {
-            return LeakAssessment(status: .observed, title: "已获取 UDP 出口", detail: "缺少 Claude 出口，无法比较 UDP 路径。")
+            return LeakAssessment(status: .observed, title: L("已获取 UDP 出口", "UDP exit found"),
+                                  detail: L("缺少 Claude 出口，无法比较 UDP 路径。", "There's no Claude exit to compare the UDP path with."))
         }
         if publicIPs.contains(where: { !ClaudeExit.sameIP($0, exit.ip) }) {
-            return LeakAssessment(status: .different, title: "出口不同 · 可能泄露",
-                                  detail: "WebRTC 观测到与本次 Claude HTTPS 出口不同的公网 UDP 地址。请结合分流规则判断；结果只代表 Status 的临时 WebKit 环境。")
+            return LeakAssessment(status: .different, title: L("出口不同 · 可能泄露", "Different exit · possible leak"),
+                                  detail: L("WebRTC 观测到与本次 Claude HTTPS 出口不同的公网 UDP 地址。请结合分流规则判断；结果只代表 Status 的临时 WebKit 环境。",
+                                            "WebRTC saw a public UDP address different from this Claude HTTPS exit. Check your routing rules; this only reflects Status's temporary WebKit environment."))
         }
-        return LeakAssessment(status: .matching, title: "出口一致",
-                              detail: "已观测的公网 UDP 候选与本次 Claude 出口一致。只代表此次检测的候选，不代表其他浏览器或客户端。")
+        return LeakAssessment(status: .matching, title: L("出口一致", "Same exit"),
+                              detail: L("已观测的公网 UDP 候选与本次 Claude 出口一致。只代表此次检测的候选，不代表其他浏览器或客户端。",
+                                        "The public UDP candidates match this Claude exit. This only covers this check, not other browsers or clients."))
     }
 }
 
@@ -151,7 +159,7 @@ final class WebRTCLeakProbe: NSObject, WKNavigationDelegate {
         cancel()
         let id = UUID()
         runID = id
-        guard !Task.isCancelled else { return WebRTCLeakResult(checkedAt: Date(), error: "已取消") }
+        guard !Task.isCancelled else { return WebRTCLeakResult(checkedAt: Date(), error: L("已取消", "Cancelled")) }
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 self.continuation = continuation
@@ -165,7 +173,7 @@ final class WebRTCLeakProbe: NSObject, WKNavigationDelegate {
                 timeout = Task { [weak self] in
                     do { try await Task.sleep(for: .seconds(9)) } catch { return }
                     guard let self, self.runID == id else { return }
-                    self.finish(WebRTCLeakResult(checkedAt: Date(), error: "WebRTC 检测超时，无法确认 UDP 出口"))
+                    self.finish(WebRTCLeakResult(checkedAt: Date(), error: L("WebRTC 检测超时，无法确认 UDP 出口", "The WebRTC check timed out, so the UDP exit is unknown")))
                 }
             }
         } onCancel: {
@@ -177,7 +185,7 @@ final class WebRTCLeakProbe: NSObject, WKNavigationDelegate {
     }
 
     func cancel() {
-        finish(WebRTCLeakResult(checkedAt: Date(), error: "已取消"))
+        finish(WebRTCLeakResult(checkedAt: Date(), error: L("已取消", "Cancelled")))
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -186,7 +194,7 @@ final class WebRTCLeakProbe: NSObject, WKNavigationDelegate {
             switch result {
             case .success(let raw):
                 guard let dict = raw as? [String: Any] else {
-                    self.finish(WebRTCLeakResult(checkedAt: Date(), error: "WebRTC 返回格式不可用"))
+                    self.finish(WebRTCLeakResult(checkedAt: Date(), error: L("WebRTC 返回格式不可用", "WebRTC returned an unreadable result")))
                     return
                 }
                 let candidates = (dict["candidates"] as? [[String: String]] ?? []).compactMap { row -> WebRTCCandidate? in
@@ -196,19 +204,19 @@ final class WebRTCLeakProbe: NSObject, WKNavigationDelegate {
                 self.finish(WebRTCLeakResult(checkedAt: Date(), candidates: candidates,
                                              completed: dict["completed"] as? Bool ?? false, error: dict["error"] as? String))
             case .failure:
-                self.finish(WebRTCLeakResult(checkedAt: Date(), error: "当前 WebKit 环境无法完成 WebRTC 检测"))
+                self.finish(WebRTCLeakResult(checkedAt: Date(), error: L("当前 WebKit 环境无法完成 WebRTC 检测", "This WebKit environment can't run the WebRTC check")))
             }
         }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         guard self.webView === webView else { return }
-        finish(WebRTCLeakResult(checkedAt: Date(), error: "WebRTC 检测环境加载失败"))
+        finish(WebRTCLeakResult(checkedAt: Date(), error: L("WebRTC 检测环境加载失败", "The WebRTC check failed to load")))
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         guard self.webView === webView else { return }
-        finish(WebRTCLeakResult(checkedAt: Date(), error: "WebRTC 检测环境加载失败"))
+        finish(WebRTCLeakResult(checkedAt: Date(), error: L("WebRTC 检测环境加载失败", "The WebRTC check failed to load")))
     }
 
     private func finish(_ result: WebRTCLeakResult) {
@@ -222,7 +230,8 @@ final class WebRTCLeakProbe: NSObject, WKNavigationDelegate {
         continuation.resume(returning: result)
     }
 
-    private static let script = #"""
+    /// 计算属性：错误文字跟随当前界面语言
+    private static var script: String { #"""
     return await new Promise(async resolve => {
         const candidates = [];
         let pc, timer, finished = false;
@@ -234,8 +243,8 @@ final class WebRTCLeakProbe: NSObject, WKNavigationDelegate {
             delete window.statusStop;
             resolve({ candidates, completed, ...(error ? {error} : {}) });
         };
-        window.statusStop = () => done(false, '已取消');
-        if (typeof RTCPeerConnection !== 'function') { done(false, '当前 WebKit 不支持 WebRTC'); return; }
+        window.statusStop = () => done(false, '\#(L("已取消", "Cancelled"))');
+        if (typeof RTCPeerConnection !== 'function') { done(false, '\#(L("当前 WebKit 不支持 WebRTC", "This WebKit does not support WebRTC"))'); return; }
         timer = setTimeout(() => done(false), 5000);
         try {
             pc = new RTCPeerConnection({ iceServers: [
@@ -251,7 +260,7 @@ final class WebRTCLeakProbe: NSObject, WKNavigationDelegate {
             pc.createDataChannel('status-network-check');
             await pc.setLocalDescription(await pc.createOffer());
             if (pc.iceGatheringState === 'complete') done(true);
-        } catch (e) { done(false, 'WebRTC 无法收集候选：' + (e.name || '未知错误')); }
+        } catch (e) { done(false, '\#(L("WebRTC 无法收集候选：", "WebRTC could not gather candidates: "))' + (e.name || '\#(L("未知错误", "unknown error"))')); }
     });
-    """#
+    """# }
 }
