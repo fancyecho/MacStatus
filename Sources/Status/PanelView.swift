@@ -23,7 +23,6 @@ struct PanelView: View {
         // 换字体或语言时整块重建，所有文字立即更新
         .id("\(prefs.font.rawValue)-\(prefs.language.rawValue)")
         .environment(\.hintCenter, hints)
-        .coordinateSpace(name: HintCenter.space)
         .overlay(alignment: .topLeading) { HintOverlay(center: hints) }
         .onChange(of: prefs.page) { _, _ in hints.dismiss() }
         .background { PanelSurface() }
@@ -515,6 +514,11 @@ private struct SettingsView: View {
     @ObservedObject private var updater = UpdateChecker.shared
 
     var body: some View {
+        // 设置项比屏幕高，和网络诊断页一样放进固定高度的滚动区
+        PanelScrollView { sections }
+    }
+
+    private var sections: some View {
         VStack(alignment: .leading, spacing: 8) {
             section(L("菜单栏显示", "Menu Bar")) {
                 toggle("CPU", "cpu", $prefs.showCPU)

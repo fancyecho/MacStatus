@@ -26,7 +26,7 @@ struct NetworkDetailView: View {
     var body: some View {
         VStack(spacing: 8) {
             toolbar
-            ScrollView {
+            PanelScrollView {
                 VStack(spacing: 8) {
                     exitCard
                     trustCard
@@ -35,29 +35,7 @@ struct NetworkDetailView: View {
                     dnsCard
                     webRTCCard
                 }
-                .background {
-                    GeometryReader { geo in
-                        Color.clear.preference(key: NetworkScrollMetricsKey.self,
-                                               value: NetworkScrollMetrics(top: geo.frame(in: .named("network-detail-scroll")).minY,
-                                                                           height: geo.size.height))
-                    }
-                }
-                .padding(.horizontal, 1)
-                .padding(.bottom, 3)
             }
-            .coordinateSpace(name: "network-detail-scroll")
-            .scrollIndicators(.hidden)
-            .frame(height: viewportHeight)
-            .mask {
-                LinearGradient(stops: [
-                    .init(color: detail.scrollTop < -1 ? .clear : .black, location: 0),
-                    .init(color: .black, location: 12 / viewportHeight),
-                    .init(color: .black, location: 1 - 12 / viewportHeight),
-                    .init(color: detail.scrollTop + detail.contentHeight > viewportHeight + 1 ? .clear : .black, location: 1),
-                ], startPoint: .top, endPoint: .bottom)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
-            .onPreferenceChange(NetworkScrollMetricsKey.self) { detail.update($0) }
         }
         .onAppear { diagnostics.setVisible(true) }
         .onDisappear { diagnostics.setVisible(false) }
@@ -265,10 +243,6 @@ struct NetworkDetailView: View {
         .accessibilityLabel(label + ": " + (value.map { $0 ? L("检测到", "detected") : L("未检测到", "not detected") } ?? L("未知", "unknown")))
     }
 
-    private var viewportHeight: CGFloat {
-        min(540, max(260, (NSScreen.main?.visibleFrame.height ?? 800) - 160))
-    }
-
     private var intervalTitle: String {
         switch diagnostics.refreshInterval {
         case 0: L("手动", "Manual")
@@ -460,21 +434,5 @@ private struct NetworkInfoRow: View {
 
 private final class NetworkDetailState: ObservableObject {
     @Published var showAllDNS = false
-    @Published private(set) var scrollTop: CGFloat = 0
-    @Published private(set) var contentHeight: CGFloat = 0
-
-    func update(_ metrics: NetworkScrollMetrics) {
-        if abs(metrics.top - scrollTop) > 0.5 { scrollTop = metrics.top }
-        if abs(metrics.height - contentHeight) > 0.5 { contentHeight = metrics.height }
-    }
 }
 
-private struct NetworkScrollMetrics: Equatable {
-    var top: CGFloat = 0
-    var height: CGFloat = 0
-}
-
-private struct NetworkScrollMetricsKey: PreferenceKey {
-    static let defaultValue = NetworkScrollMetrics()
-    static func reduce(value: inout NetworkScrollMetrics, nextValue: () -> NetworkScrollMetrics) { value = nextValue() }
-}

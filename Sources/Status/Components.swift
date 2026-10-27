@@ -526,34 +526,39 @@ private struct ChartScrubber: View {
 // MARK: - Hover hints
 
 /// 自定义悬停提示。面板属于后台应用、窗口不激活，系统的 .help 提示气泡不会出现，所以自己画。
-/// 各视图用 .hint() 报告自己的位置和文字，面板根部的 HintOverlay 统一显示
+/// 位置取悬停时鼠标在屏幕上的实际位置（和系统提示一样出现在指针下方），显示时再换算到提示层里。
+/// 不用 SwiftUI 的布局坐标：元素常处在展开、翻页、滚动之中，测到的坐标会过期或换算错，提示就会错位
 @MainActor
 final class HintCenter: ObservableObject {
     struct Hint: Equatable {
         let id: UUID
         let text: String
-        let anchor: CGRect
+        /// 屏幕坐标（左下角原点）
+        let screenPoint: CGPoint
     }
-
-    static let space = "panel"
     @Published private(set) var hint: Hint?
     private var pending: DispatchWorkItem?
 
-    func hover(id: UUID, text: String, anchor: CGRect, active: Bool) {
+    /// 指针在带提示的元素上移动：停稳一会儿后出现；已有提示时直接换成新的
+    func track(id: UUID, text: String) {
+        if hint?.id == id { return }
         pending?.cancel()
-        guard active else {
-            if hint?.id == id { hint = nil }
-            return
-        }
-        let next = Hint(id: id, text: text, anchor: anchor)
-        // 已经有提示在显示时（从一个元素移到另一个）立刻切换，否则稍等一下再出现
+        let next = Hint(id: id, text: text, screenPoint: NSEvent.mouseLocation)
         if hint != nil {
             hint = next
             return
         }
-        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.hint = next } }
+        // 停稳后用那一刻的指针位置
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.hint = Hint(id: id, text: text, screenPoint: NSEvent.mouseLocation) }
+        }
         pending = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    func end(id: UUID) {
+        pending?.cancel()
+        if hint?.id == id { hint = nil }
     }
 
     func dismiss() {
@@ -575,7 +580,6 @@ extension EnvironmentValues {
 
 final class HintAnchor: ObservableObject {
     let id = UUID()
-    var frame: CGRect = .zero
 }
 
 private struct HintModifier: ViewModifier {
@@ -586,15 +590,12 @@ private struct HintModifier: ViewModifier {
     func body(content: Content) -> some View {
         if let center, !text.isEmpty {
             content
-                .background {
-                    GeometryReader { geo in
-                        let frame = geo.frame(in: .named(HintCenter.space))
-                        Color.clear
-                            .onAppear { anchor.frame = frame }
-                            .onChange(of: frame) { _, new in anchor.frame = new }
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active: center.track(id: anchor.id, text: text)
+                    case .ended: center.end(id: anchor.id)
                     }
                 }
-                .onHover { center.hover(id: anchor.id, text: text, anchor: anchor.frame, active: $0) }
         } else {
             content
         }
@@ -606,54 +607,147 @@ extension View {
     func hint(_ text: String) -> some View { modifier(HintModifier(text: text)) }
 }
 
-/// 在面板根部绘制当前的悬停提示：默认放在元素下方，放不下就放上方，左右不超出面板
+/// 在面板根部绘制当前的悬停提示：放在指针右下方，放不下就放上方，左右不超出面板
 struct HintOverlay: View {
     @ObservedObject var center: HintCenter
 
     var body: some View {
         GeometryReader { geo in
-            // 放在 topLeading 的 ZStack 里，alignmentGuide 才能决定位置
-            ZStack(alignment: .topLeading) {
-                Color.clear
-                if let hint = center.hint {
-                HintBubble(text: hint.text)
-                    .frame(maxWidth: 260, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .alignmentGuide(.leading) { d in
-                        -min(max(hint.anchor.midX - d.width / 2, 8), geo.size.width - d.width - 8)
-                    }
-                    .alignmentGuide(.top) { d in
-                        let below = hint.anchor.maxY + 6
-                        return -(below + d.height <= geo.size.height - 4 ? below : hint.anchor.minY - d.height - 6)
-                    }
-                    .id(hint.id)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            let hint = center.hint
+            let point = hint.flatMap { Self.localPoint($0.screenPoint, overlay: geo.frame(in: .global)) }
+            HintPlacement(point: point ?? .zero) {
+                if let hint, point != nil {
+                    HintBubble(text: hint.text)
+                        .id(hint.id)
+                        .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading)))
                 }
             }
         }
         .allowsHitTesting(false)
-        .animation(.easeOut(duration: 0.12), value: center.hint)
+        .animation(.easeOut(duration: 0.14), value: center.hint)
+    }
+
+    /// 屏幕坐标 → 提示层坐标：先换到面板窗口里（SwiftUI 的 global 是窗口内容区、左上角原点），再减去提示层的位置
+    private static func localPoint(_ screen: CGPoint, overlay: CGRect) -> CGPoint? {
+        guard let window = NSApp.windows.first(where: { $0 is StatusPanel }), let content = window.contentView else { return nil }
+        let inWindow = window.convertPoint(fromScreen: screen)
+        return CGPoint(x: inWindow.x - overlay.minX, y: content.bounds.height - inWindow.y - overlay.minY)
     }
 }
 
+/// 先按最多 250 宽量出气泡的真实尺寸（文字会换行），再据此摆放。
+/// 不能用 .frame(maxWidth:)：弹性框会直接撑满 250，按它算右边界会把提示推到左边
+private struct HintPlacement: Layout {
+    let point: CGPoint
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let bubble = subviews.first else { return }
+        let size = bubble.sizeThatFits(ProposedViewSize(width: min(250, bounds.width - 16), height: nil))
+        let x = min(max(point.x - 14, 8), bounds.width - size.width - 8)
+        let below = point.y + 20
+        let y = below + size.height <= bounds.height - 6 ? below : point.y - size.height - 10
+        bubble.place(at: CGPoint(x: bounds.minX + x, y: bounds.minY + y), proposal: ProposedViewSize(size))
+    }
+}
+
+/// 提示卡片：磨砂底 + 细边 + 柔和阴影，和面板里的卡片同一套语言。
+/// 多行提示的第一行是标题（正文色），其余是说明（次要色）
 struct HintBubble: View {
     let text: String
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-        Text(text)
-            .font(Typeface.ui(11))
-            .lineSpacing(2)
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
-            .background {
-                shape.fill(scheme == .dark ? Color(white: 0.2).opacity(0.96) : Color.white.opacity(0.97))
-                    .overlay { shape.strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5) }
-                    .shadow(color: .black.opacity(scheme == .dark ? 0.35 : 0.14), radius: 8, y: 3)
+        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+        let lines = text.split(separator: "\n", maxSplits: 1).map(String.init)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(lines[0])
+                .font(Typeface.ui(11, lines.count > 1 ? .medium : .regular))
+                .foregroundStyle(.primary)
+            if lines.count > 1 {
+                Text(lines[1])
+                    .font(Typeface.ui(10.5))
+                    .foregroundStyle(Ink.secondary)
             }
+        }
+        .lineSpacing(1.5)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background {
+            shape.fill(.thickMaterial)
+                .overlay { shape.fill(scheme == .dark ? Color.white.opacity(0.04) : Color.white.opacity(0.35)) }
+                .overlay { shape.strokeBorder(Color.primary.opacity(scheme == .dark ? 0.14 : 0.1), lineWidth: 0.5) }
+                .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.1), radius: 10, y: 4)
+        }
     }
+}
+
+// MARK: - Scrolling
+
+/// 面板里的滚动区：固定高度、隐藏滚动条，上下边缘在还能继续滚动时渐隐，四角跟卡片同心
+struct PanelScrollView<Content: View>: View {
+    @ViewBuilder var content: Content
+    @StateObject private var metrics = ScrollMetricsState()
+    private let space = "panel-scroll"
+
+    /// 屏幕再矮也至少 260，最高 540
+    static var viewportHeight: CGFloat {
+        min(540, max(260, (NSScreen.main?.visibleFrame.height ?? 800) - 160))
+    }
+
+    var body: some View {
+        let height = Self.viewportHeight
+        ScrollView {
+            content
+                .background {
+                    GeometryReader { geo in
+                        Color.clear.preference(key: ScrollMetricsKey.self,
+                                               value: ScrollMetrics(top: geo.frame(in: .named(space)).minY, height: geo.size.height))
+                    }
+                }
+                .padding(.horizontal, 1)
+                .padding(.bottom, 3)
+        }
+        .coordinateSpace(name: space)
+        .scrollIndicators(.hidden)
+        .frame(height: height)
+        .mask {
+            LinearGradient(stops: [
+                .init(color: metrics.top < -1 ? .clear : .black, location: 0),
+                .init(color: .black, location: 12 / height),
+                .init(color: .black, location: 1 - 12 / height),
+                .init(color: metrics.top + metrics.height > height + 1 ? .clear : .black, location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
+        .onPreferenceChange(ScrollMetricsKey.self) { value in
+            MainActor.assumeIsolated { metrics.update(value) }
+        }
+    }
+}
+
+@MainActor
+private final class ScrollMetricsState: ObservableObject {
+    @Published private(set) var top: CGFloat = 0
+    @Published private(set) var height: CGFloat = 0
+
+    func update(_ value: ScrollMetrics) {
+        if abs(value.top - top) > 0.5 { top = value.top }
+        if abs(value.height - height) > 0.5 { height = value.height }
+    }
+}
+
+private struct ScrollMetrics: Equatable {
+    var top: CGFloat = 0
+    var height: CGFloat = 0
+}
+
+private struct ScrollMetricsKey: PreferenceKey {
+    static let defaultValue = ScrollMetrics()
+    static func reduce(value: inout ScrollMetrics, nextValue: () -> ScrollMetrics) { value = nextValue() }
 }
 
 // MARK: - Buttons
