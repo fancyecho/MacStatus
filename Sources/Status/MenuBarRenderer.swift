@@ -167,9 +167,17 @@ enum MenuBarRenderer {
         return NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color])
     }
 
+    /// 菜单栏只用到几个固定的符号和两种墨色，网速每变一次都要重绘，缓存起来不用每次重新生成
+    private static var symbolCache: [String: NSImage] = [:]
+
     private static func symbol(_ name: String, size: CGFloat, weight: NSFont.Weight, color: NSColor) -> NSImage? {
+        let rgba = color.usingColorSpace(.deviceRGB).map { "\($0.redComponent),\($0.greenComponent),\($0.blueComponent),\($0.alphaComponent)" } ?? color.description
+        let key = "\(name)|\(size)|\(weight.rawValue)|\(rgba)"
+        if let cached = symbolCache[key] { return cached }
         let configuration = NSImage.SymbolConfiguration(pointSize: size, weight: weight)
             .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
-        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+        symbolCache[key] = image
+        return image
     }
 }

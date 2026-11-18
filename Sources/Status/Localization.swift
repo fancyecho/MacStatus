@@ -14,9 +14,23 @@ enum AppLanguage: String, CaseIterable {
 }
 
 enum Lang {
-    nonisolated(unsafe) static var setting: AppLanguage = .system
+    nonisolated(unsafe) static var setting: AppLanguage = .system {
+        didSet { refresh() }
+    }
 
-    static var isChinese: Bool {
+    /// L() 每次渲染会被调用几百次，读 Locale.preferredLanguages 要查用户偏好，所以算好后缓存；
+    /// 系统语言改变时由通知刷新
+    nonisolated(unsafe) private(set) static var isChinese = resolve()
+
+    private static let localeObserver = NotificationCenter.default.addObserver(
+        forName: NSLocale.currentLocaleDidChangeNotification, object: nil, queue: .main) { _ in refresh() }
+
+    private static func refresh() {
+        _ = localeObserver
+        isChinese = resolve()
+    }
+
+    private static func resolve() -> Bool {
         switch setting {
         case .chinese: true
         case .english: false

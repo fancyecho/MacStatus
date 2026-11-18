@@ -180,14 +180,6 @@ private struct BatteryHistoryCard: View {
         }
     }
 
-    private func closedArea(_ line: Path, from start: CGFloat, to end: CGFloat, bottom: CGFloat) -> Path {
-        var area = line
-        area.addLine(to: CGPoint(x: end, y: bottom))
-        area.addLine(to: CGPoint(x: start, y: bottom))
-        area.closeSubpath()
-        return area
-    }
-
     /// 按睡眠等长时间空档把记录断开成几段
     private func segments() -> [[BatteryHistory.Point]] {
         var result: [[BatteryHistory.Point]] = []
@@ -289,11 +281,13 @@ struct FlowLine: View {
     let flow: Flow
     let tint: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 面板收起后窗口还在（只是隐藏），不暂停的话动画会一直按 30 帧刷新
+    @Environment(\.panelPresented) private var presented
 
     private static let dotCount = 3
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: flow == .idle || reduceMotion)) { timeline in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: flow == .idle || reduceMotion || !presented)) { timeline in
             Canvas { context, size in
                 let y = size.height / 2
                 var track = Path()
@@ -346,10 +340,11 @@ struct FlowLine: View {
 /// 充电时一道柔光从左到右扫过电量条，约 2.4 秒一次
 private struct ChargingSheen: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.panelPresented) private var presented
 
     var body: some View {
         if !reduceMotion {
-            TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: !presented)) { timeline in
                 GeometryReader { geo in
                     let cycle = 2.4
                     let t = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle) / cycle

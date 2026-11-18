@@ -245,7 +245,7 @@ final class SystemMonitor: ObservableObject {
         // CPU、内存、网速很便宜，且历史曲线需要连续数据，始终采样
         cpu = cpuSampler.sample()
         memory = MemorySampler.sample()
-        network = networkSampler.sample()
+        network = networkSampler.sample(includeAddress: active)
 
         // 下面这些读 IORegistry / 遍历所有进程，比较贵：面板关闭时只采菜单栏用得到的
         if active || prefs.showGPU {
@@ -280,8 +280,11 @@ final class SystemMonitor: ObservableObject {
         if active || ((prefs.showTemperature || prefs.alertHot) && tickCount % 2 == 0) {
             temperature = temperatureSampler.sample()
         }
-        uptime = SystemInfo.uptime
-        loadAverage = SystemInfo.loadAverage
+        // 运行时间、平均负载只在面板里显示
+        if active {
+            uptime = SystemInfo.uptime
+            loadAverage = SystemInfo.loadAverage
+        }
         if Self.demoMode { applyDemoData() }
         if !first {
             alerts.evaluate(battery: battery, temperature: temperature?.cpu, memoryPressure: memory.pressureLevel,
@@ -322,7 +325,7 @@ final class SystemMonitor: ObservableObject {
         if !latencyLoading, force || now - lastLatencySample >= 4 {
             latencyLoading = true
             lastLatencySample = now
-            DispatchQueue.global(qos: .utility).async {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
                 let result = LatencySampler.sample()
                 DispatchQueue.main.async { [weak self] in
                     MainActor.assumeIsolated {
@@ -332,15 +335,21 @@ final class SystemMonitor: ObservableObject {
                 }
             }
         }
-        // 面板打开时每 10 秒看一次；连接 / 断开外设由 PeripheralWatcher 立即触发
-        if force || now - lastPeripheralSample >= 10 { refreshPeripherals() }
+        // 读 AirPods 电量要启动 system_profiler（约半秒到一秒的 CPU），面板打开时每分钟看一次就够了；
+        // 连接 / 断开外设由 PeripheralWatcher 立即触发，打开面板时也会立即刷新
+        if force || now - lastPeripheralSample >= 60 { refreshPeripherals() }
     }
 
-    /// 外设连接或断开：系统写入电量信息可能慢一两秒，所以分几次读
+    /// 外设连接或断开：系统写入电量信息可能慢一两秒，所以分几次读。
+    /// 面板关着时不读（外设电量只在面板里显示），下次打开面板会立即刷新
     private func peripheralsChanged() {
+        guard panelVisible else { return }
         for delay in [0.5, 2.5, 6.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                MainActor.assumeIsolated { self?.refreshPeripherals() }
+                MainActor.assumeIsolated {
+                    guard let self, self.panelVisible else { return }
+                    self.refreshPeripherals()
+                }
             }
         }
     }
@@ -349,7 +358,7 @@ final class SystemMonitor: ObservableObject {
         guard !peripheralsLoading else { return }
         peripheralsLoading = true
         lastPeripheralSample = ProcessInfo.processInfo.systemUptime
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = PeripheralSampler.sample()
             DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {

@@ -358,11 +358,13 @@ actor ClaudeNetworkClient {
 
     private enum DataError: Error { case http(Int), invalid }
 
+    private static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1"
+
     private func fetch<T: Decodable>(_ type: T.Type, path: String, ip: String) async throws -> T {
         let url = URL(string: "https://ip.net.coffee/api/\(path)/")!.appendingPathComponent(ip)
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Status/1.4 NetworkDiagnostics", forHTTPHeaderField: "User-Agent")
+        request.setValue("Status/\(Self.appVersion) NetworkDiagnostics", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw DataError.invalid }
         guard http.statusCode == 200 else { throw DataError.http(http.statusCode) }

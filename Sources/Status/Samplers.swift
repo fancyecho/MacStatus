@@ -19,7 +19,6 @@ struct MemorySnapshot {
     var app: UInt64 = 0
     var wired: UInt64 = 0
     var compressed: UInt64 = 0
-    var cached: UInt64 = 0
     var swapUsed: UInt64 = 0
     var pressureLevel: Int = 1 // 1 正常 / 2 警告 / 4 严重
 
@@ -87,7 +86,9 @@ struct ProcessEntry: Identifiable {
 // MARK: - CPU
 
 final class CPUSampler {
-    private var previous: [[UInt32]] = []
+    /// 每个核心 4 个计数（user / system / idle / nice），平铺成一维数组，避免每次采样分配一堆小数组
+    private var previous: [UInt32] = []
+    private static let fields = [CPU_STATE_USER, CPU_STATE_SYSTEM, CPU_STATE_IDLE, CPU_STATE_NICE].map(Int.init)
 
     func sample() -> CPUSnapshot {
         var cpuCount: natural_t = 0
@@ -100,25 +101,25 @@ final class CPUSampler {
                           vm_size_t(Int(infoCount) * MemoryLayout<integer_t>.stride))
         }
 
-        var current: [[UInt32]] = []
-        for i in 0..<Int(cpuCount) {
-            let base = Int(CPU_STATE_MAX) * i
-            current.append([
-                UInt32(bitPattern: info[base + Int(CPU_STATE_USER)]),
-                UInt32(bitPattern: info[base + Int(CPU_STATE_SYSTEM)]),
-                UInt32(bitPattern: info[base + Int(CPU_STATE_IDLE)]),
-                UInt32(bitPattern: info[base + Int(CPU_STATE_NICE)]),
-            ])
+        let cores = Int(cpuCount)
+        var current = [UInt32](repeating: 0, count: cores * 4)
+        for core in 0..<cores {
+            let base = Int(CPU_STATE_MAX) * core
+            for (slot, field) in Self.fields.enumerated() {
+                current[core * 4 + slot] = UInt32(bitPattern: info[base + field])
+            }
         }
         defer { previous = current }
-        guard previous.count == current.count else { return CPUSnapshot(cores: Array(repeating: 0, count: current.count)) }
+        guard previous.count == current.count else { return CPUSnapshot(cores: Array(repeating: 0, count: cores)) }
 
         var snapshot = CPUSnapshot()
+        snapshot.cores.reserveCapacity(cores)
         var sumUser = 0.0, sumSystem = 0.0, sumTotal = 0.0
-        for (cur, prev) in zip(current, previous) {
-            let user = Double(cur[0] &- prev[0]) + Double(cur[3] &- prev[3])
-            let system = Double(cur[1] &- prev[1])
-            let idle = Double(cur[2] &- prev[2])
+        for core in 0..<cores {
+            func delta(_ slot: Int) -> Double { Double(current[core * 4 + slot] &- previous[core * 4 + slot]) }
+            let user = delta(0) + delta(3)
+            let system = delta(1)
+            let idle = delta(2)
             let total = user + system + idle
             snapshot.cores.append(total > 0 ? (user + system) / total * 100 : 0)
             sumUser += user; sumSystem += system; sumTotal += total
@@ -152,7 +153,6 @@ enum MemorySampler {
         snapshot.app = (internalPages > purgeable ? internalPages - purgeable : 0) * page
         snapshot.wired = UInt64(stats.wire_count) * page
         snapshot.compressed = UInt64(stats.compressor_page_count) * page
-        snapshot.cached = (purgeable + UInt64(stats.external_page_count)) * page
 
         var swap = xsw_usage()
         var size = MemoryLayout<xsw_usage>.size
@@ -190,12 +190,18 @@ enum GPUSampler {
 final class NetworkSampler {
     private var last: (rx: UInt64, tx: UInt64, time: TimeInterval)?
     private var names: [UInt16: String] = [:]
+    private var interfaceIndexes: [UInt16] = []
+    private var countedIndexes: [UInt16] = []
+    private var address: String?
 
-    func sample() -> NetworkSnapshot {
-        let (rx, tx) = counters()
+    /// - Parameter includeAddress: IP 地址只在面板里显示，菜单栏采样时沿用上次的结果，省掉一次 getifaddrs
+    func sample(includeAddress: Bool) -> NetworkSnapshot {
+        let (rx, tx, interfacesChanged) = counters()
         let now = ProcessInfo.processInfo.systemUptime
-        var snapshot = NetworkSnapshot(totalDown: rx, totalUp: tx, address: Self.primaryIPv4())
-        if let last, now > last.time {
+        if includeAddress { address = Self.primaryIPv4() }
+        var snapshot = NetworkSnapshot(totalDown: rx, totalUp: tx, address: address)
+        // 插上新网卡时总量会突然加上它已有的计数，这一次不算速度，避免出现一个假的尖峰
+        if let last, now > last.time, !interfacesChanged {
             let dt = now - last.time
             snapshot.down = rx >= last.rx ? Double(rx - last.rx) / dt : 0
             snapshot.up = tx >= last.tx ? Double(tx - last.tx) / dt : 0
@@ -213,14 +219,15 @@ final class NetworkSampler {
     }
 
     /// 只统计物理接口（en*），避免 VPN 隧道重复计数
-    private func counters() -> (UInt64, UInt64) {
+    private func counters() -> (rx: UInt64, tx: UInt64, interfacesChanged: Bool) {
         var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0]
         var length = 0
-        guard sysctl(&mib, UInt32(mib.count), nil, &length, nil, 0) == 0, length > 0 else { return (0, 0) }
+        guard sysctl(&mib, UInt32(mib.count), nil, &length, nil, 0) == 0, length > 0 else { return (0, 0, false) }
         var buffer = [UInt8](repeating: 0, count: length)
-        guard sysctl(&mib, UInt32(mib.count), &buffer, &length, nil, 0) == 0 else { return (0, 0) }
+        guard sysctl(&mib, UInt32(mib.count), &buffer, &length, nil, 0) == 0 else { return (0, 0, false) }
 
         var rx: UInt64 = 0, tx: UInt64 = 0
+        var indexes: [UInt16] = [], counted: [UInt16] = []
         buffer.withUnsafeBytes { raw in
             var offset = 0
             while offset + MemoryLayout<if_msghdr>.size <= length {
@@ -229,7 +236,9 @@ final class NetworkSampler {
                 if Int32(header.ifm_type) == RTM_IFINFO2,
                    offset + MemoryLayout<if_msghdr2>.size <= length {
                     let message = raw.loadUnaligned(fromByteOffset: offset, as: if_msghdr2.self)
+                    indexes.append(message.ifm_index)
                     if interfaceName(message.ifm_index).hasPrefix("en") {
+                        counted.append(message.ifm_index)
                         rx += message.ifm_data.ifi_ibytes
                         tx += message.ifm_data.ifi_obytes
                     }
@@ -237,7 +246,13 @@ final class NetworkSampler {
                 offset += Int(header.ifm_msglen)
             }
         }
-        return (rx, tx)
+        // 接口增减（插拔网卡、连上 VPN）后编号可能被复用，缓存的名字就不可信了，下次重新查
+        if !interfaceIndexes.isEmpty && indexes != interfaceIndexes { names.removeAll() }
+        interfaceIndexes = indexes
+        // 只有参与统计的物理接口变了，总量才会跳变
+        let changed = !countedIndexes.isEmpty && counted != countedIndexes
+        countedIndexes = counted
+        return (rx, tx, changed)
     }
 
     static func primaryIPv4() -> String? {
@@ -518,6 +533,8 @@ struct ProcessSample {
 final class ProcessSampler {
     private var previous: [pid_t: UInt64] = [:]
     private var lastTime: UInt64 = 0
+    /// 上一次 CPU 排行的顺序，用来在显示值相同的进程之间保持原来的先后，列表不会无谓地换位
+    private var lastCPURank: [pid_t: Int] = [:]
     private var identities: [pid_t: (name: String, icon: NSImage)] = [:]
     private var paths: [pid_t: String] = [:]
     private static let genericIcon = NSWorkspace.shared.icon(for: .unixExecutable)
@@ -561,8 +578,15 @@ final class ProcessSampler {
                 return ProcessEntry(id: row.pid, name: identity.name, icon: identity.icon, cpu: row.cpu, memory: row.memory)
             }
         }
-        return ProcessSample(byCPU: entries(rows.sorted { $0.cpu > $1.cpu }),
-                             byMemory: entries(rows.sorted { $0.memory > $1.memory }))
+        // 按显示精度（0.1%）比较，相同时沿用上一次的先后
+        let rank = lastCPURank
+        let byCPU = entries(rows.sorted { a, b in
+            let x = (a.cpu * 10).rounded(), y = (b.cpu * 10).rounded()
+            if x != y { return x > y }
+            return (rank[a.pid] ?? .max, a.pid) < (rank[b.pid] ?? .max, b.pid)
+        })
+        lastCPURank = Dictionary(uniqueKeysWithValues: byCPU.enumerated().map { ($1.id, $0) })
+        return ProcessSample(byCPU: byCPU, byMemory: entries(rows.sorted { $0.memory > $1.memory }))
     }
 
     private func path(for pid: pid_t) -> String {

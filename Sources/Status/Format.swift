@@ -6,7 +6,8 @@ enum Fmt {
         let units = ["B", "KB", "MB", "GB", "TB"]
         var v = max(value, 0)
         var index = 0
-        while v >= base && index < units.count - 1 { v /= base; index += 1 }
+        // 用四舍五入后的值判断进位：999.7 KB 应显示为 1.00 MB，而不是 "1000 KB"
+        while v.rounded() >= base && index < units.count - 1 { v /= base; index += 1 }
         let number: String
         if index == 0 { number = String(format: "%.0f", v) }
         else if v >= 100 { number = String(format: "%.0f", v) }
@@ -35,7 +36,7 @@ enum Fmt {
         let units = ["B", "K", "M", "G"]
         var v = max(value, 0)
         var index = 0
-        while v >= 1000 && index < units.count - 1 { v /= 1000; index += 1 }
+        while v.rounded() >= 1000 && index < units.count - 1 { v /= 1000; index += 1 }
         let number = (v >= 10 || index == 0) ? String(format: "%.0f", v) : String(format: "%.1f", v)
         return number + units[index]
     }

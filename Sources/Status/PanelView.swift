@@ -462,7 +462,6 @@ private struct ProcessRow: View {
     @StateObject private var hover = HoverState()
 
     var body: some View {
-        let app = NSRunningApplication(processIdentifier: row.id)
         HStack(spacing: 8) {
             Image(nsImage: row.icon)
                 .resizable()
@@ -489,19 +488,28 @@ private struct ProcessRow: View {
         .onHover { hover.hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hover.hovering)
         .hint("\(row.name)\nPID \(row.id) · CPU \(String(format: "%.1f%%", row.cpu)) · " + L("内存 ", "Memory ") + Fmt.memory(row.memory) + "\n" + L("右键查看更多操作", "Right-click for more actions"))
-        .contextMenu {
-            if let url = app?.bundleURL {
-                Button(L("在访达中显示", "Show in Finder")) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-            }
-            if let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier, app.activationPolicy == .regular {
-                Button(L("切换到 ", "Switch to ") + row.name) { app.activate() }
-                Divider()
-                Button(L("退出 ", "Quit ") + row.name) { app.terminate() }
-            }
-            Button(L("拷贝 PID ", "Copy PID ") + "\(row.id)") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString("\(row.id)", forType: .string)
-            }
+        .contextMenu { ProcessMenu(row: row) }
+    }
+}
+
+/// 右键菜单单独成一个视图：查询 NSRunningApplication 要走 LaunchServices，
+/// 放在这里只在打开菜单时才做，而不是每次刷新进程列表都查一遍
+private struct ProcessMenu: View {
+    let row: ProcessEntry
+
+    var body: some View {
+        let app = NSRunningApplication(processIdentifier: row.id)
+        if let url = app?.bundleURL {
+            Button(L("在访达中显示", "Show in Finder")) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        }
+        if let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier, app.activationPolicy == .regular {
+            Button(L("切换到 ", "Switch to ") + row.name) { app.activate() }
+            Divider()
+            Button(L("退出 ", "Quit ") + row.name) { app.terminate() }
+        }
+        Button(L("拷贝 PID ", "Copy PID ") + "\(row.id)") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("\(row.id)", forType: .string)
         }
     }
 }

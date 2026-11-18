@@ -149,6 +149,8 @@ final class StatusPanel: NSPanel {
     }
 
     private func installMonitors() {
+        // STATUS_SHOW_PANEL 测试时不响应外部点击：测试期间用户照常用电脑，一次点击就会把面板关掉、让测量失效
+        if ProcessInfo.processInfo.environment["STATUS_SHOW_PANEL"] != nil { return }
         // 点击其他地方或按 Esc 时收起，和系统菜单一致
         // 点在菜单栏图标上的交给图标自己处理（切换开关），否则会先收起再被重新打开
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in

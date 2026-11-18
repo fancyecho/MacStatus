@@ -307,10 +307,11 @@ private func smoothLine(_ points: [CGPoint]) -> Path {
     return path
 }
 
-private func closedArea(_ line: Path, points: [CGPoint], bottom: CGFloat) -> Path {
+/// 把一条折线向下封闭到底边，用来填充曲线下方的渐变
+func closedArea(_ line: Path, from start: CGFloat, to end: CGFloat, bottom: CGFloat) -> Path {
     var area = line
-    area.addLine(to: CGPoint(x: points[points.count - 1].x, y: bottom))
-    area.addLine(to: CGPoint(x: points[0].x, y: bottom))
+    area.addLine(to: CGPoint(x: end, y: bottom))
+    area.addLine(to: CGPoint(x: start, y: bottom))
     area.closeSubpath()
     return area
 }
@@ -329,7 +330,7 @@ struct Sparkline: View {
             let points = chartPoints(values, capacity: capacity, maxValue: top, in: geo.size, inset: 1.5)
             if points.count > 1 {
                 let line = smoothLine(points)
-                let area = closedArea(line, points: points, bottom: geo.size.height)
+                let area = closedArea(line, from: points[0].x, to: points[points.count - 1].x, bottom: geo.size.height)
                 ZStack {
                     area.fill(LinearGradient(colors: [tint.opacity(0.32), tint.opacity(0.0)], startPoint: .top, endPoint: .bottom))
                     line.stroke(tint, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))

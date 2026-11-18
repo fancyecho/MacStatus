@@ -33,6 +33,9 @@ final class UpdateChecker: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private static let checkInterval: TimeInterval = 24 * 60 * 60
+    /// 失败（例如没联网）后过一小时再自动重试，不在每次打开面板时都请求一次
+    private static let retryInterval: TimeInterval = 60 * 60
+    private var lastFailure: Date?
 
     var autoCheck: Bool {
         get { defaults.object(forKey: "autoCheckUpdates") as? Bool ?? true }
@@ -54,6 +57,7 @@ final class UpdateChecker: ObservableObject {
         guard autoCheck, state != .checking else { return }
         let last = defaults.double(forKey: "lastUpdateCheck")
         guard Date().timeIntervalSince1970 - last > Self.checkInterval else { return }
+        if let lastFailure, Date().timeIntervalSince(lastFailure) < Self.retryInterval { return }
         check()
     }
 
@@ -64,8 +68,10 @@ final class UpdateChecker: ObservableObject {
             do {
                 let release = try await fetchLatest()
                 defaults.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
+                lastFailure = nil
                 state = Self.isNewer(release.version, than: currentVersion) ? .available(release) : .upToDate
             } catch {
+                lastFailure = Date()
                 state = .failed(L("检查失败，请稍后再试", "Check failed, try again later"))
             }
         }
@@ -120,7 +126,7 @@ final class UpdateChecker: ObservableObject {
     }
 
     /// 按数字逐段比较版本号，例如 1.10.0 > 1.9.2
-    static func isNewer(_ candidate: String, than current: String) -> Bool {
+    nonisolated static func isNewer(_ candidate: String, than current: String) -> Bool {
         let a = candidate.split(separator: ".").map { Int($0) ?? 0 }
         let b = current.split(separator: ".").map { Int($0) ?? 0 }
         for i in 0..<max(a.count, b.count) {

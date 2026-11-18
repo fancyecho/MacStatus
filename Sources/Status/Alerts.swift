@@ -99,6 +99,8 @@ final class AlertMonitor {
 
     private func fire(_ id: String, cooldown: TimeInterval, now: Date, title: String, body: String) {
         if let last = lastFired[id], now.timeIntervalSince(last) < cooldown { return }
+        // 每个出过问题的进程都会留下一条 "busy-<pid>" 记录，超过最长冷却时间（12 小时）的清掉，避免越积越多
+        lastFired = lastFired.filter { now.timeIntervalSince($0.value) < 12 * 3600 }
         lastFired[id] = now
         post(id: id, title: title, body: body)
     }
