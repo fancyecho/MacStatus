@@ -1,8 +1,6 @@
 import SwiftUI
 
 private enum NetworkStyle {
-    static let trust = Palette.gpu
-
     static func scoreColor(_ value: Double?) -> Color {
         guard let value else { return Ink.tertiary }
         return value >= 80 ? Palette.gpu : value >= 50 ? Palette.down : value >= 25 ? Palette.disk : Palette.up
@@ -43,7 +41,7 @@ struct NetworkDetailView: View {
 
     private var toolbar: some View {
         HStack(spacing: 5) {
-            Image(systemName: "network").foregroundStyle(Palette.down)
+            Image(systemName: "network").foregroundStyle(Ink.tertiary)
             Text(diagnostics.isDemo ? L("Claude 网络诊断 · 演示", "Claude Network · Demo") : L("Claude 网络诊断", "Claude Network")).fontWeight(.semibold)
             Spacer(minLength: 4)
             intervalMenu
@@ -55,7 +53,6 @@ struct NetworkDetailView: View {
             }
             .buttonStyle(SubtleButtonStyle())
             .disabled(diagnostics.isRefreshing)
-            .hint(L("重新检测出口与连通性；同一 IP 的情报缓存 10 分钟", "Check the exit and connectivity again. IP details for the same IP are cached for 10 minutes."))
             .accessibilityLabel(L("刷新网络诊断", "Refresh network diagnostics"))
         }
         .font(Typeface.ui(11.5, .medium))
@@ -64,7 +61,7 @@ struct NetworkDetailView: View {
     }
 
     private var exitCard: some View {
-        Tile(title: L("Claude AI 出口", "Claude AI Exit"), symbol: "globe", tint: Palette.down) {
+        Tile(title: L("Claude AI 出口", "Claude AI Exit"), symbol: "globe") {
             Text(diagnostics.result?.exit?.family ?? "HTTPS")
         } content: {
             HStack(alignment: .center, spacing: 4) {
@@ -82,7 +79,6 @@ struct NetworkDetailView: View {
                         .foregroundStyle(Ink.tertiary)
                 }
                 .buttonStyle(SubtleButtonStyle())
-                .hint(diagnostics.hideIP ? L("显示 IP", "Show IP") : L("隐藏 IP", "Hide IP"))
                 .accessibilityLabel(diagnostics.hideIP ? L("显示 IP 地址", "Show IP address") : L("隐藏 IP 地址", "Hide IP address"))
                 if let ip = diagnostics.result?.exit?.ip, !diagnostics.hideIP {
                     Button {
@@ -92,7 +88,6 @@ struct NetworkDetailView: View {
                         Image(systemName: "doc.on.doc").font(Typeface.ui(10)).foregroundStyle(Ink.tertiary)
                     }
                     .buttonStyle(SubtleButtonStyle())
-                    .hint(L("复制 Claude 出口 IP", "Copy Claude exit IP"))
                     .accessibilityLabel(L("复制 Claude 出口 IP", "Copy Claude exit IP"))
                 }
             }
@@ -133,10 +128,9 @@ struct NetworkDetailView: View {
         let risk = diagnostics.result?.risk
         let score = risk?.trustScore
         let color = NetworkStyle.scoreColor(score)
-        return Tile(title: L("信任评分", "Trust Score"), symbol: "checkmark.shield", tint: NetworkStyle.trust) {
+        return Tile(title: L("信任评分", "Trust Score"), symbol: "checkmark.shield") {
             Link("Net.Coffee", destination: URL(string: "https://ip.net.coffee/claude/")!)
                 .foregroundStyle(Ink.tertiary)
-                .hint(L("查看第三方数据来源", "View the third-party data source"))
         } content: {
             HStack(alignment: .firstTextBaseline) {
                 BigNumber(value: score.map { String(format: "%.0f", $0) } ?? "—", unit: "/ 100", size: 28)
@@ -161,19 +155,17 @@ struct NetworkDetailView: View {
                 Spacer(minLength: 2)
                 if let date = diagnostics.result?.riskFetchedAt {
                     Text(date, style: .time).monospacedDigit()
-                        .hint(L("本应用获取该 IP 情报的时间；数据源自身也可能使用缓存。", "When Status fetched these IP details. The data source may cache too."))
                 }
             }
             .font(Typeface.ui(10))
             .foregroundStyle(Ink.tertiary)
         }
-        .hint(L("Net.Coffee 第三方 IP 参考评分，沿用其 95 / 80 / 50 / 25 分档。不是 Anthropic 官方评级，也不保证账户安全或服务可用。", "A third-party IP reference score from Net.Coffee, using its 95 / 80 / 50 / 25 bands. It is not an Anthropic rating and says nothing certain about account safety or availability."))
     }
 
     private var propertiesCard: some View {
         let result = diagnostics.result
         let risk = result?.risk
-        return Tile(title: L("出口属性", "Exit Details"), symbol: "point.3.connected.trianglepath.dotted", tint: Palette.cpu) {
+        return Tile(title: L("出口属性", "Exit Details"), symbol: "point.3.connected.trianglepath.dotted") {
             Text(risk?.kind.title ?? L("未知", "Unknown"))
                 .foregroundStyle(risk?.kind == .residential ? Palette.gpu : Ink.secondary)
         } content: {
@@ -184,11 +176,10 @@ struct NetworkDetailView: View {
             Divider().opacity(0.25).padding(.vertical, 2)
             riskFlags
         }
-        .hint(L("属性来自 Net.Coffee 的 IP 情报。没有明确的住宅或机房标记时显示未知，不根据运营商名称猜测。", "These details come from Net.Coffee. Without a clear residential or data center flag it shows Unknown rather than guessing from the ISP name."))
     }
 
     private var availabilityCard: some View {
-        Tile(title: L("可用性检测", "Reachability"), symbol: "waveform.path.ecg", tint: Palette.down) {
+        Tile(title: L("可用性检测", "Reachability"), symbol: "waveform.path.ecg") {
             Text("HTTPS")
         } content: {
             VStack(spacing: 7) {
@@ -227,7 +218,6 @@ struct NetworkDetailView: View {
             flag("Tor", risk?.tor)
             flag(L("滥用", "Abuse"), risk?.abuser)
         }
-        .hint(L("这些标记是情报源的检测结果；未检测到不表示绝对不存在，也不代表当前代理软件是否启用。", "These flags come from the data source. Not detected doesn't mean absent, and says nothing about whether your proxy app is on."))
     }
 
     private func flag(_ label: String, _ value: Bool?) -> some View {
@@ -284,13 +274,12 @@ struct NetworkDetailView: View {
         .fixedSize()
         .accessibilityLabel(L("自动检测间隔", "Automatic check interval"))
         .accessibilityValue(intervalTitle)
-        .hint(L("自动检测：\(intervalTitle)。仅在此页打开时运行。结果对应 Status 的请求路径；按应用分流时可能不同于 Claude 客户端。", "Automatic check: \(intervalTitle). Only runs while this page is open. Results follow Status's own route, which can differ from the Claude app if you route per app."))
     }
 
     private var dnsCard: some View {
         let sample = diagnostics.dns
         let assessment = sample?.assessment(comparedTo: diagnostics.result?.exit)
-        return Tile(title: L("DNS 泄露检测", "DNS Leak Check"), symbol: "server.rack", tint: Palette.down) {
+        return Tile(title: L("DNS 泄露检测", "DNS Leak Check"), symbol: "server.rack") {
             Text(L("解析出口", "Resolvers"))
         } content: {
             leakStatus(assessment)
@@ -327,13 +316,12 @@ struct NetworkDetailView: View {
                 .font(Typeface.ui(9.5)).foregroundStyle(Ink.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .hint(assessment?.detail ?? L("通过随机域名查询及权威 DNS 回读，观察实际解析出口。", "Queries a random domain and reads it back from the authoritative DNS to see which resolvers are really used."))
     }
 
     private var webRTCCard: some View {
         let sample = diagnostics.webRTC
         let assessment = sample?.assessment(comparedTo: diagnostics.result?.exit)
-        return Tile(title: L("WebRTC UDP 检测", "WebRTC UDP Check"), symbol: "point.3.filled.connected.trianglepath.dotted", tint: Palette.gpu) {
+        return Tile(title: L("WebRTC UDP 检测", "WebRTC UDP Check"), symbol: "point.3.filled.connected.trianglepath.dotted") {
             Text("ICE / STUN")
         } content: {
             leakStatus(assessment)
@@ -354,7 +342,6 @@ struct NetworkDetailView: View {
             Text(L("本次临时 WebKit 环境的检测结果。", "Result from a temporary WebKit environment."))
                 .font(Typeface.ui(9.5)).foregroundStyle(Ink.tertiary)
         }
-        .hint(assessment?.detail ?? L("建立无媒体的 WebRTC 数据通道，向 Google / Cloudflare STUN 收集 UDP ICE 候选。不请求摄像头或麦克风权限。", "Opens a media-free WebRTC data channel and gathers UDP ICE candidates from Google / Cloudflare STUN. No camera or microphone access is requested."))
     }
 
     private func leakSummary(_ name: String, assessment: LeakAssessment?) -> some View {
@@ -366,17 +353,25 @@ struct NetworkDetailView: View {
         }
         .font(Typeface.ui(9.5, .medium))
         .foregroundStyle(Ink.secondary)
-        .hint(assessment?.detail ?? L("检测结果详情在下方，可向下滚动查看。", "Details are below; scroll down to see them."))
     }
 
     private func leakStatus(_ assessment: LeakAssessment?) -> some View {
-        HStack(spacing: 5) {
-            Circle().fill(leakColor(assessment)).frame(width: 5, height: 5)
-            Text(assessment?.title ?? (diagnostics.isRefreshing ? L("正在检测…", "Checking…") : L("未检测", "Not checked")))
-                .foregroundStyle(leakColor(assessment))
-            Spacer(minLength: 0)
+        // 结论下面直接写出说明，不再藏在整张卡片的悬停提示里
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                Circle().fill(leakColor(assessment)).frame(width: 5, height: 5)
+                Text(assessment?.title ?? (diagnostics.isRefreshing ? L("正在检测…", "Checking…") : L("未检测", "Not checked")))
+                    .foregroundStyle(leakColor(assessment))
+                Spacer(minLength: 0)
+            }
+            .font(Typeface.ui(11, .medium))
+            if let detail = assessment?.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(Typeface.ui(10))
+                    .foregroundStyle(Ink.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .font(Typeface.ui(11, .medium))
         .padding(.bottom, 2)
     }
 
@@ -425,7 +420,6 @@ private struct NetworkInfoRow: View {
                 .multilineTextAlignment(.trailing)
                 .lineLimit(2)
                 .textSelection(.enabled)
-                .hint(value)
         }
         .font(Typeface.ui(11))
         .fixedSize(horizontal: false, vertical: true)

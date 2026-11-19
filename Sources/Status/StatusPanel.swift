@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 enum Metrics {
-    static let panelRadius: CGFloat = 24
-    static let panelPadding: CGFloat = 10
+    static let panelRadius: CGFloat = 26
+    static let panelPadding: CGFloat = 12
     /// 卡片圆角 = 面板圆角 − 内边距，和面板保持同心
     static let cardRadius: CGFloat = panelRadius - panelPadding
     /// 面板与菜单栏之间的距离
@@ -43,7 +43,7 @@ final class PanelPresentation: ObservableObject {
 /// 这样内容和玻璃背景始终在同一个动画里同步变化，不会出现窗口尺寸动画和内容动画对不上的卡顿
 @MainActor
 final class StatusPanel: NSPanel {
-    static let panelWidth: CGFloat = 340
+    static let panelWidth: CGFloat = 352
     /// 面板四周留给阴影的透明边距
     static let shadowMargin: CGFloat = 30
 

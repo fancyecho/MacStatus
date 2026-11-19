@@ -58,6 +58,11 @@ enum Snapshot {
                     capture(PanelPreview(), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics, dark: dark, to: "\(dir)/battery-\(dark ? "dark" : "light").png")
                 }
             }
+            // 悬停提示卡片的两种样式：结构化（网络质量）和纯文字
+            for dark in [false, true] {
+                capture(HintSamples(), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics, dark: dark,
+                        to: "\(dir)/hints-\(dark ? "dark" : "light").png")
+            }
             prefs.page = .overview
             for dark in [false, true] {
                 capture(MenuBarStrip(values: monitor.menuBar.values, prefs: prefs), monitor: monitor, prefs: prefs, networkDiagnostics: networkDiagnostics, dark: dark,
@@ -211,6 +216,32 @@ private struct PanelPreview: View {
             .background(LinearGradient(colors: dark ? [Color(red: 0.1, green: 0.12, blue: 0.25), Color(red: 0.25, green: 0.1, blue: 0.2)]
                                                     : [Color(red: 0.62, green: 0.75, blue: 0.95), Color(red: 0.95, green: 0.75, blue: 0.8)],
                                        startPoint: .topLeading, endPoint: .bottomTrailing))
+    }
+}
+
+/// 悬停提示的样例，放在和面板一样的底色上
+private struct HintSamples: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            HintBubble(content: HintContent(title: L("Wi-Fi 与延迟", "Wi-Fi & Latency"), rows: [
+                .init(label: L("信号", "Signal"), value: "-52 dBm"),
+                .init(label: L("信噪比", "SNR"), value: "41 dB"),
+                .init(label: L("信道", "Channel"), value: "149 · 5 GHz"),
+                .init(label: L("网关", "Router"), value: "4 ms", tint: Palette.battery),
+                .init(label: "Cloudflare  1.1.1.1", value: "23 ms", tint: Palette.battery),
+                .init(label: "Google  8.8.8.8", value: "88 ms", tint: .orange),
+            ], note: L("“互联网”取以上任播 DNS 中最快的一个，只在面板打开时测量。", "Internet is the fastest of these anycast DNS servers, measured only while the panel is open.")))
+            .frame(width: 230)
+            VStack(alignment: .leading, spacing: 16) {
+                HintBubble(content: HintContent(L("系统内存压力升高，可能开始频繁压缩或使用交换空间。", "Memory pressure is rising and the system may start swapping heavily.")))
+                    .frame(width: 200, alignment: .leading)
+                ReadoutBubble(value: "42%", detail: L("8 秒前", "8s ago"))
+            }
+        }
+        .padding(24)
+        .background(scheme == .dark ? Color(red: 0.16, green: 0.16, blue: 0.19) : Color(red: 0.93, green: 0.93, blue: 0.95))
     }
 }
 

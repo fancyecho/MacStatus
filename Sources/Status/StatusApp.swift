@@ -11,7 +11,6 @@ enum StatusApp {
         }
         // The app already owns a status item and NSPanel; a SwiftUI Settings scene
         // would create a second, empty window when launched/reopened by Finder.
-        Typeface.registerBundledFonts()
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
         let delegate = AppDelegate()

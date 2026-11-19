@@ -1,14 +1,15 @@
 import CoreText
 import SwiftUI
 
+/// 数据配色。颜色只用在数据上（曲线、进度条、数值状态），卡片标题和图标保持单色，界面才不显得花
 enum Palette {
-    static let cpu = Color(red: 0.38, green: 0.56, blue: 1.00)
-    static let memory = Color(red: 0.66, green: 0.48, blue: 1.00)
-    static let gpu = Color(red: 0.20, green: 0.78, blue: 0.72)
-    static let disk = Color(red: 1.00, green: 0.62, blue: 0.28)
-    static let down = Color(red: 0.25, green: 0.70, blue: 1.00)
-    static let up = Color(red: 1.00, green: 0.42, blue: 0.58)
-    static let battery = Color(red: 0.30, green: 0.82, blue: 0.45)
+    static let cpu = Color(red: 0.36, green: 0.56, blue: 1.00)
+    static let memory = Color(red: 0.67, green: 0.50, blue: 1.00)
+    static let gpu = Color(red: 0.20, green: 0.78, blue: 0.70)
+    static let disk = Color(red: 1.00, green: 0.63, blue: 0.30)
+    static let down = Color(red: 0.28, green: 0.70, blue: 1.00)
+    static let up = Color(red: 1.00, green: 0.44, blue: 0.58)
+    static let battery = Color(red: 0.30, green: 0.82, blue: 0.47)
 
     static func level(_ percent: Double) -> Color {
         percent >= 90 ? Color(red: 1, green: 0.36, blue: 0.36) : percent >= 70 ? Color(red: 1, green: 0.72, blue: 0.2) : .clear
@@ -20,8 +21,10 @@ enum Palette {
 /// 次要文字颜色。SwiftUI 的 .secondary/.tertiary 在毛玻璃窗口里会走 vibrancy 混合，
 /// 和背景糊在一起；这里用固定的不透明度，深浅色各自调到足够的对比度。
 enum Ink {
-    static let secondary = dynamic(dark: 0.76, light: 0.68)
-    static let tertiary = dynamic(dark: 0.58, light: 0.52)
+    static let secondary = dynamic(dark: 0.74, light: 0.66)
+    static let tertiary = dynamic(dark: 0.52, light: 0.48)
+    /// 卡片里的分隔线、空轨道
+    static let hairline = dynamic(dark: 0.08, light: 0.07)
 
     private static func dynamic(dark: CGFloat, light: CGFloat) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
@@ -32,9 +35,25 @@ enum Ink {
     }
 }
 
+/// 卡片和分组的小标题：英文用小号大写加字距，中文保持原样（大写对汉字没有意义，字距会显得松散）
+struct SectionLabel: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        if Lang.isChinese {
+            Text(text).font(Typeface.ui(11, .medium)).foregroundStyle(Ink.secondary)
+        } else {
+            Text(text.uppercased()).font(Typeface.ui(9.5, .semibold)).tracking(0.7).foregroundStyle(Ink.secondary)
+        }
+    }
+}
+
 // MARK: - Card
 
-/// 磨砂玻璃卡片：半透明的亮色层 + 顶部更亮的细边，叠在面板的毛玻璃上
+/// 卡片：只是一层很淡的色调和一圈发丝细边。面板本身已经是玻璃，卡片不再叠高光边和阴影，
+/// 层次靠明度区分，整体更干净
 struct CardBackground: ViewModifier {
     @Environment(\.colorScheme) private var scheme
 
@@ -42,18 +61,8 @@ struct CardBackground: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous)
         let dark = scheme == .dark
         content
-            .background { shape.fill(Color.white.opacity(dark ? 0.065 : 0.5)) }
-            .overlay {
-                shape.strokeBorder(
-                    LinearGradient(colors: [.white.opacity(dark ? 0.16 : 0.9), .white.opacity(dark ? 0.03 : 0.35)],
-                                   startPoint: .top, endPoint: .bottom),
-                    lineWidth: 0.7)
-            }
-            // 浅色模式下白色高光边在浅背景上看不出来，再加一圈很淡的深色细线勾出卡片边界
-            .overlay {
-                if !dark { shape.strokeBorder(Color.black.opacity(0.07), lineWidth: 0.5) }
-            }
-            .shadow(color: .black.opacity(dark ? 0.16 : 0.07), radius: dark ? 3 : 4, y: 1)
+            .background { shape.fill(dark ? Color.white.opacity(0.055) : Color.white.opacity(0.66)) }
+            .overlay { shape.strokeBorder(dark ? Color.white.opacity(0.075) : Color.black.opacity(0.06), lineWidth: 0.5) }
     }
 }
 
@@ -64,132 +73,80 @@ extension View {
 struct Tile<Accessory: View, Content: View>: View {
     let title: String
     let symbol: String
-    let tint: Color
     @ViewBuilder var accessory: Accessory
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 5) {
                 Image(systemName: symbol)
-                    .font(Typeface.ui(10, .bold))
-                    .foregroundStyle(tint)
-                Text(title)
-                    .font(Typeface.ui(11, .medium))
-                    .foregroundStyle(Ink.secondary)
-                Spacer(minLength: 0)
+                    .font(Typeface.ui(9.5, .semibold))
+                    .foregroundStyle(Ink.tertiary)
+                    .frame(width: 12)
+                SectionLabel(title)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
                 accessory
                     .font(Typeface.ui(10.5, .medium))
                     .foregroundStyle(Ink.tertiary)
+                    .lineLimit(1)
             }
-            .frame(height: 15)   // 右上角有没有内容都保持同样高度
+            .frame(height: 14)   // 右上角有没有内容都保持同样高度
             content
         }
-        .padding(11)
+        .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .card()
     }
 }
 
 extension Tile where Accessory == EmptyView {
-    init(title: String, symbol: String, tint: Color, @ViewBuilder content: () -> Content) {
-        self.init(title: title, symbol: symbol, tint: tint, accessory: { EmptyView() }, content: content)
+    init(title: String, symbol: String, @ViewBuilder content: () -> Content) {
+        self.init(title: title, symbol: symbol, accessory: { EmptyView() }, content: content)
     }
 }
 
 // MARK: - Numbers
 
-/// 可选的字体。Geist 和圆体同时用于界面文字和数字；其他几种只换数字，标签保持系统字体
-enum AppFont: String, CaseIterable {
-    case geist, system, rounded, mono, din, serif
-
-    var title: String {
-        switch self {
-        case .geist: "Geist"
-        case .system: "SF Pro"
-        case .rounded: L("圆体", "Rounded")
-        case .mono: L("等宽", "Mono")
-        case .din: "DIN"
-        case .serif: L("衬线", "Serif")
-        }
-    }
-}
-
-/// 界面和数字字体，全部经过这里，换字体时只改一处
+/// 界面和数字字体，全部经过这里：统一用 SF Rounded，圆润、清晰，等宽数字也好看
 enum Typeface {
-    nonisolated(unsafe) static var current: AppFont = .geist
-
-    /// 注册随应用附带的 Geist（在 .app 的 Resources/Fonts 里；开发时直接从源码目录读取）
-    static func registerBundledFonts() {
-        let bundled = Bundle.main.resourceURL?.appendingPathComponent("Fonts")
-        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .appendingPathComponent("../../Resources/Fonts").standardized
-        guard let folder = [bundled, source].compactMap({ $0 }).first(where: { FileManager.default.fileExists(atPath: $0.path) }),
-              let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return }
-        for file in files where file.pathExtension == "ttf" {
-            CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil)
-        }
-    }
-
     /// 界面文字
     static func ui(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        switch current {
-        case .geist: geist(size, weight)
-        case .rounded: .system(size: size, weight: weight, design: .rounded)
-        default: .system(size: size, weight: weight)
-        }
+        .system(size: size, weight: weight, design: .rounded)
     }
 
-    /// 数字。font 默认是当前选择，设置里预览其他字体时传入
-    static func number(_ size: CGFloat, weight: Font.Weight = .semibold, font: AppFont = Typeface.current) -> Font {
-        switch font {
-        // Geist 的半粗体偏厚，大号数字降一档更精致
-        case .geist: geist(size, size >= 16 && weight == .semibold ? .medium : weight)
-        case .system: .system(size: size, weight: weight)
-        case .rounded: .system(size: size, weight: weight, design: .rounded)
-        case .mono: .system(size: size * 0.92, weight: weight == .semibold ? .medium : weight, design: .monospaced)
-        case .din: .custom("DINAlternate-Bold", size: size * 1.04)
-        case .serif: .system(size: size, weight: weight, design: .serif)
-        }
+    /// 数字：大号数字降一档字重，更轻盈
+    static func number(_ size: CGFloat, weight: Font.Weight = .semibold) -> Font {
+        .system(size: size, weight: size >= 18 && weight == .semibold ? .medium : weight, design: .rounded)
     }
 
     static func tracking(_ size: CGFloat) -> CGFloat {
-        guard size >= 18 else { return 0 }
-        return current == .mono || current == .din ? -size * 0.01 : -size * 0.02
-    }
-
-    private static func geist(_ size: CGFloat, _ weight: Font.Weight) -> Font {
-        let name = switch weight {
-        case .bold, .heavy, .black: "Geist-Bold"
-        case .semibold: "Geist-SemiBold"
-        case .medium: "Geist-Medium"
-        default: "Geist-Regular"
-        }
-        return .custom(name, size: size)
+        size >= 18 ? -size * 0.012 : 0
     }
 }
 
 struct BigNumber: View {
     let value: String
     let unit: String
-    var size: CGFloat = 24
+    var size: CGFloat = 26
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 2) {
+        HStack(alignment: .firstTextBaseline, spacing: 2.5) {
             Text(value)
                 .font(Typeface.number(size))
                 .tracking(Typeface.tracking(size))
                 .monospacedDigit()
-                .contentTransition(.numericText())
+                // 实时数据每一两秒就变，滚动数字会一直晃；只做一次很短的交叉淡化
+                .contentTransition(.opacity)
             Text(unit)
-                .font(Typeface.ui(size * 0.5, .medium))
-                .foregroundStyle(Ink.secondary)
+                .font(Typeface.ui(max(10, size * 0.44), .medium))
+                .foregroundStyle(Ink.tertiary)
         }
-        .animation(.snappy(duration: 0.35), value: value)
+        .animation(.easeInOut(duration: 0.25), value: value)
     }
 }
 
-/// 一行"标签 …… 数值"，左边是色点或小图标。单行、等宽数字，数值变化不会改变高度
+/// 一行"标签 …… 数值"，左边是色块或小图标。单行、等宽数字，数值变化不会改变高度
 struct Legend: View {
     let color: Color
     let label: String
@@ -197,14 +154,14 @@ struct Legend: View {
     var symbol: String? = nil
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
             if let symbol {
                 Image(systemName: symbol)
                     .font(Typeface.ui(8.5, .heavy))
                     .foregroundStyle(color)
-                    .frame(width: 8)
+                    .frame(width: 7)
             } else {
-                Circle().fill(color).frame(width: 6, height: 6)
+                RoundedRectangle(cornerRadius: 2, style: .continuous).fill(color).frame(width: 7, height: 7)
             }
             Text(label).foregroundStyle(Ink.secondary)
             Spacer(minLength: 4)
@@ -220,14 +177,14 @@ struct Legend: View {
 struct MeterBar: View {
     let fraction: Double
     let tint: Color
-    var height: CGFloat = 6
+    var height: CGFloat = 5
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.08))
+                Capsule().fill(Ink.hairline)
                 Capsule()
-                    .fill(LinearGradient(colors: [tint.opacity(0.75), tint], startPoint: .leading, endPoint: .trailing))
+                    .fill(LinearGradient(colors: [tint.opacity(0.7), tint], startPoint: .leading, endPoint: .trailing))
                     .frame(width: max(height, geo.size.width * min(max(fraction, 0), 1)))
             }
         }
@@ -239,42 +196,42 @@ struct MeterBar: View {
 struct SegmentBar: View {
     let segments: [(value: Double, color: Color)]
     let total: Double
-    var height: CGFloat = 6
+    var height: CGFloat = 5
 
     var body: some View {
         GeometryReader { geo in
-            HStack(spacing: 1.5) {
+            HStack(spacing: 2) {
                 ForEach(segments.indices, id: \.self) { i in
-                    Rectangle()
+                    Capsule()
                         .fill(segments[i].color)
-                        .frame(width: max(0, geo.size.width * segments[i].value / max(total, 1) - 1.5))
+                        .frame(width: max(0, geo.size.width * segments[i].value / max(total, 1) - 2))
                 }
                 Spacer(minLength: 0)
             }
-            .background(Color.primary.opacity(0.08))
-            .clipShape(Capsule())
+            .background(Capsule().fill(Ink.hairline))
         }
         .frame(height: height)
         .animation(.easeOut(duration: 0.4), value: segments.map(\.value))
     }
 }
 
+/// 每个核心一根细柱，占用越高颜色越实
 struct CoreBars: View {
     let cores: [Double]
     let tint: Color
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 2) {
+        HStack(alignment: .bottom, spacing: cores.count > 12 ? 1.5 : 2.5) {
             ForEach(cores.indices, id: \.self) { i in
                 GeometryReader { geo in
+                    let radius = min(2, geo.size.width / 2)
                     ZStack(alignment: .bottom) {
-                        RoundedRectangle(cornerRadius: 1.5).fill(Color.primary.opacity(0.08))
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(tint.opacity(0.4 + 0.6 * cores[i] / 100))
-                            .frame(height: max(1.5, geo.size.height * min(cores[i], 100) / 100))
+                        RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Ink.hairline)
+                        RoundedRectangle(cornerRadius: radius, style: .continuous)
+                            .fill(tint.opacity(0.35 + 0.65 * min(cores[i], 100) / 100))
+                            .frame(height: max(2, geo.size.height * min(cores[i], 100) / 100))
                     }
                 }
-                .hint(L("核心 \(i + 1)：", "Core \(i + 1): ") + "\(Int(cores[i].rounded()))%")
             }
         }
         .animation(.easeOut(duration: 0.4), value: cores)
@@ -316,34 +273,78 @@ func closedArea(_ line: Path, from start: CGFloat, to end: CGFloat, bottom: CGFl
     return area
 }
 
+/// 图表里的水平参考线：很淡的点线，给曲线一个刻度感
+struct ChartGuides: View {
+    /// 0…1，从底部算起
+    let levels: [Double]
+
+    var body: some View {
+        GeometryReader { geo in
+            Path { path in
+                for level in levels {
+                    let y = (geo.size.height * (1 - level)).rounded() + 0.25
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: geo.size.width, y: y))
+                }
+            }
+            .stroke(Color.primary.opacity(0.09), style: StrokeStyle(lineWidth: 0.5, dash: [1.5, 2.5]))
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// 曲线最右端的"现在"：实心小点 + 一圈柔光
+private struct ChartHead: View {
+    let tint: Color
+
+    var body: some View {
+        ZStack {
+            Circle().fill(tint.opacity(0.2)).frame(width: 10, height: 10)
+            Circle().fill(tint).frame(width: 4.5, height: 4.5)
+        }
+    }
+}
+
 struct Sparkline: View {
     let values: [Double]
     var maxValue: Double? = nil
     let tint: Color
     var capacity = SystemMonitor.historyLength
+    /// 参考线位置（0…1）
+    var guides: [Double] = []
+    /// 在最新的点上画一个小圆点
+    var head = true
     /// 鼠标悬停时显示的读数；为 nil 时不响应悬停
     var readout: ChartReadout? = nil
 
     var body: some View {
         GeometryReader { geo in
             let top = max(maxValue ?? (values.max() ?? 1), 0.0001)
-            let points = chartPoints(values, capacity: capacity, maxValue: top, in: geo.size, inset: 1.5)
-            if points.count > 1 {
-                let line = smoothLine(points)
-                let area = closedArea(line, from: points[0].x, to: points[points.count - 1].x, bottom: geo.size.height)
-                ZStack {
-                    area.fill(LinearGradient(colors: [tint.opacity(0.32), tint.opacity(0.0)], startPoint: .top, endPoint: .bottom))
-                    line.stroke(tint, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+            let points = chartPoints(values, capacity: capacity, maxValue: top, in: geo.size, inset: 2)
+            ZStack(alignment: .topLeading) {
+                if !guides.isEmpty { ChartGuides(levels: guides) }
+                if points.count > 1, let last = points.last {
+                    let line = smoothLine(points)
+                    let area = closedArea(line, from: points[0].x, to: last.x, bottom: geo.size.height)
+                    area.fill(LinearGradient(colors: [tint.opacity(0.24), tint.opacity(0.0)], startPoint: .top, endPoint: .bottom))
+                    line.stroke(tint, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                    if head {
+                        ChartHead(tint: tint).position(last)
+                    }
+                } else {
+                    Path { path in
+                        path.move(to: CGPoint(x: 0, y: geo.size.height - 0.5))
+                        path.addLine(to: CGPoint(x: geo.size.width, y: geo.size.height - 0.5))
+                    }
+                    .stroke(Color.primary.opacity(0.1), style: StrokeStyle(lineWidth: 1, dash: [1.5, 2.5]))
                 }
-            } else {
-                Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1).frame(maxHeight: .infinity, alignment: .bottom)
             }
         }
         .overlay {
             if let readout {
                 ChartScrubber(count: values.count, capacity: capacity, readout: readout) { index, size in
                     let top = max(maxValue ?? (values.max() ?? 1), 0.0001)
-                    let points = chartPoints(values, capacity: capacity, maxValue: top, in: size, inset: 1.5)
+                    let points = chartPoints(values, capacity: capacity, maxValue: top, in: size, inset: 2)
                     return points.indices.contains(index) ? [(points[index], tint)] : []
                 }
             }
@@ -370,15 +371,15 @@ struct MirrorChart: View {
                     .frame(height: half.height)
                     .scaleEffect(x: 1, y: -1)
             }
-            .overlay { Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 0.5) }
+            .overlay { Rectangle().fill(Ink.hairline).frame(height: 0.5) }
         }
         .overlay {
             if let readout {
                 ChartScrubber(count: top.count, capacity: SystemMonitor.historyLength, readout: readout) { index, size in
                     let half = CGSize(width: size.width, height: size.height / 2)
                     let peak = max(top.max() ?? 0, bottom.max() ?? 0, 10_000)
-                    let up = chartPoints(top, capacity: SystemMonitor.historyLength, maxValue: peak, in: half, inset: 1.5)
-                    let down = chartPoints(bottom, capacity: SystemMonitor.historyLength, maxValue: peak, in: half, inset: 1.5)
+                    let up = chartPoints(top, capacity: SystemMonitor.historyLength, maxValue: peak, in: half, inset: 2)
+                    let down = chartPoints(bottom, capacity: SystemMonitor.historyLength, maxValue: peak, in: half, inset: 2)
                     var markers: [(CGPoint, Color)] = []
                     if up.indices.contains(index) { markers.append((up[index], topTint)) }
                     // 下半部分是翻转画的，换算回整个图表的坐标
@@ -408,10 +409,8 @@ final class HoverLocation: ObservableObject {
 struct ReadoutBubble: View {
     let value: String
     let detail: String
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
         HStack(spacing: 5) {
             Text(value)
                 .font(Typeface.ui(10.5, .semibold))
@@ -424,12 +423,8 @@ struct ReadoutBubble: View {
         .lineLimit(1)
         .fixedSize()
         .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background {
-            shape.fill(scheme == .dark ? Color(white: 0.2).opacity(0.94) : Color.white.opacity(0.96))
-                .overlay { shape.strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5) }
-                .shadow(color: .black.opacity(scheme == .dark ? 0.35 : 0.12), radius: 5, y: 2)
-        }
+        .padding(.vertical, 3.5)
+        .popoverSurface(radius: 7)
     }
 }
 
@@ -526,6 +521,55 @@ private struct ChartScrubber: View {
 
 // MARK: - Hover hints
 
+/// 浮层卡片的底：不透明的抬起卡片 + 发丝边 + 两层柔和阴影。不用毛玻璃：面板已经是玻璃，再叠一层只会更乱
+struct PopoverSurface: ViewModifier {
+    var radius: CGFloat = 10
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let dark = scheme == .dark
+        content.background {
+            shape.fill(dark ? Color(white: 0.2) : Color.white)
+                .overlay { shape.strokeBorder(dark ? Color.white.opacity(0.1) : Color.black.opacity(0.08), lineWidth: 0.5) }
+                .shadow(color: .black.opacity(dark ? 0.4 : 0.1), radius: 14, y: 6)
+                .shadow(color: .black.opacity(dark ? 0.25 : 0.06), radius: 1.5, y: 0.5)
+        }
+    }
+}
+
+extension View {
+    func popoverSurface(radius: CGFloat = 10) -> some View { modifier(PopoverSurface(radius: radius)) }
+}
+
+/// 悬停提示的内容：标题，可选的"标签 … 数值"几行，和一段补充说明
+struct HintContent: Equatable {
+    struct Row: Equatable {
+        let label: String
+        let value: String
+        var tint: Color? = nil
+    }
+
+    var title: String
+    var rows: [Row] = []
+    var note: String? = nil
+
+    /// 纯文字：多行时第一行作标题、其余作说明；一句话就只是说明，不加粗
+    init(_ text: String) {
+        let lines = text.split(separator: "\n", maxSplits: 1).map(String.init)
+        title = lines.count > 1 ? lines[0] : ""
+        note = lines.last
+    }
+
+    init(title: String, rows: [Row] = [], note: String? = nil) {
+        self.title = title
+        self.rows = rows
+        self.note = note
+    }
+
+    var isEmpty: Bool { title.isEmpty && rows.isEmpty && (note ?? "").isEmpty }
+}
+
 /// 自定义悬停提示。面板属于后台应用、窗口不激活，系统的 .help 提示气泡不会出现，所以自己画。
 /// 位置取悬停时鼠标在屏幕上的实际位置（和系统提示一样出现在指针下方），显示时再换算到提示层里。
 /// 不用 SwiftUI 的布局坐标：元素常处在展开、翻页、滚动之中，测到的坐标会过期或换算错，提示就会错位
@@ -533,7 +577,7 @@ private struct ChartScrubber: View {
 final class HintCenter: ObservableObject {
     struct Hint: Equatable {
         let id: UUID
-        let text: String
+        let content: HintContent
         /// 屏幕坐标（左下角原点）
         let screenPoint: CGPoint
     }
@@ -541,20 +585,22 @@ final class HintCenter: ObservableObject {
     private var pending: DispatchWorkItem?
 
     /// 指针在带提示的元素上移动：停稳一会儿后出现；已有提示时直接换成新的
-    func track(id: UUID, text: String) {
-        if hint?.id == id { return }
-        pending?.cancel()
-        let next = Hint(id: id, text: text, screenPoint: NSEvent.mouseLocation)
-        if hint != nil {
-            hint = next
+    func track(id: UUID, content: HintContent) {
+        if hint?.id == id {
+            // 内容随数据刷新时原地更新，位置不动
+            if hint?.content != content, let current = hint { hint = Hint(id: id, content: content, screenPoint: current.screenPoint) }
             return
         }
-        // 停稳后用那一刻的指针位置
+        pending?.cancel()
+        if hint != nil {
+            hint = Hint(id: id, content: content, screenPoint: NSEvent.mouseLocation)
+            return
+        }
         let work = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated { self?.hint = Hint(id: id, text: text, screenPoint: NSEvent.mouseLocation) }
+            MainActor.assumeIsolated { self?.hint = Hint(id: id, content: content, screenPoint: NSEvent.mouseLocation) }
         }
         pending = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
     func end(id: UUID) {
@@ -584,28 +630,30 @@ final class HintAnchor: ObservableObject {
 }
 
 private struct HintModifier: ViewModifier {
-    let text: String
+    let content: HintContent
     @Environment(\.hintCenter) private var center
     @StateObject private var anchor = HintAnchor()
 
-    func body(content: Content) -> some View {
-        if let center, !text.isEmpty {
-            content
+    func body(content view: Content) -> some View {
+        if let center, !content.isEmpty {
+            view
+                .contentShape(Rectangle())
                 .onContinuousHover { phase in
                     switch phase {
-                    case .active: center.track(id: anchor.id, text: text)
+                    case .active: center.track(id: anchor.id, content: content)
                     case .ended: center.end(id: anchor.id)
                     }
                 }
         } else {
-            content
+            view
         }
     }
 }
 
 extension View {
-    /// 悬停一会儿后显示的说明文字（替代 .help）
-    func hint(_ text: String) -> some View { modifier(HintModifier(text: text)) }
+    /// 悬停一会儿后显示的说明（替代 .help）。只给真正需要补充信息的地方用
+    func hint(_ text: String) -> some View { modifier(HintModifier(content: HintContent(text))) }
+    func hint(_ content: HintContent) -> some View { modifier(HintModifier(content: content)) }
 }
 
 /// 在面板根部绘制当前的悬停提示：放在指针右下方，放不下就放上方，左右不超出面板
@@ -618,14 +666,14 @@ struct HintOverlay: View {
             let point = hint.flatMap { Self.localPoint($0.screenPoint, overlay: geo.frame(in: .global)) }
             HintPlacement(point: point ?? .zero) {
                 if let hint, point != nil {
-                    HintBubble(text: hint.text)
+                    HintBubble(content: hint.content)
                         .id(hint.id)
-                        .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading)))
+                        .transition(.opacity.combined(with: .offset(y: -3)))
                 }
             }
         }
         .allowsHitTesting(false)
-        .animation(.easeOut(duration: 0.14), value: center.hint)
+        .animation(.easeOut(duration: 0.16), value: center.hint?.id)
     }
 
     /// 屏幕坐标 → 提示层坐标：先换到面板窗口里（SwiftUI 的 global 是窗口内容区、左上角原点），再减去提示层的位置
@@ -655,34 +703,50 @@ private struct HintPlacement: Layout {
     }
 }
 
-/// 提示卡片：磨砂底 + 细边 + 柔和阴影，和面板里的卡片同一套语言。
-/// 多行提示的第一行是标题（正文色），其余是说明（次要色）
+/// 提示卡片：标题、两列的数据行（标签淡、数值实且等宽对齐）、底部一段说明，用发丝线隔开
 struct HintBubble: View {
-    let text: String
-    @Environment(\.colorScheme) private var scheme
+    let content: HintContent
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
-        let lines = text.split(separator: "\n", maxSplits: 1).map(String.init)
-        VStack(alignment: .leading, spacing: 3) {
-            Text(lines[0])
-                .font(Typeface.ui(11, lines.count > 1 ? .medium : .regular))
-                .foregroundStyle(.primary)
-            if lines.count > 1 {
-                Text(lines[1])
-                    .font(Typeface.ui(10.5))
-                    .foregroundStyle(Ink.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            if !content.title.isEmpty {
+                Text(content.title)
+                    .font(Typeface.ui(11.5, .semibold))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !content.rows.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(content.rows.indices, id: \.self) { index in
+                        let row = content.rows[index]
+                        HStack(spacing: 12) {
+                            Text(row.label).foregroundStyle(Ink.secondary)
+                            Spacer(minLength: 8)
+                            Text(row.value).foregroundStyle(row.tint ?? .primary).monospacedDigit()
+                        }
+                        .font(Typeface.ui(10.5, .medium))
+                        .lineLimit(1)
+                    }
+                }
+                .padding(.top, 8)
+            }
+            if let note = content.note {
+                if content.rows.isEmpty {
+                    if !content.title.isEmpty { Color.clear.frame(height: 3) }
+                } else {
+                    Rectangle().fill(Ink.hairline).frame(height: 0.5).padding(.vertical, 7)
+                }
+                Text(note)
+                    .font(Typeface.ui(content.title.isEmpty && content.rows.isEmpty ? 11 : 10.5))
+                    .foregroundStyle(content.title.isEmpty && content.rows.isEmpty ? Color.primary : Ink.secondary)
+                    .lineSpacing(1.5)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .lineSpacing(1.5)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background {
-            shape.fill(.thickMaterial)
-                .overlay { shape.fill(scheme == .dark ? Color.white.opacity(0.04) : Color.white.opacity(0.35)) }
-                .overlay { shape.strokeBorder(Color.primary.opacity(scheme == .dark ? 0.14 : 0.1), lineWidth: 0.5) }
-                .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.1), radius: 10, y: 4)
-        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .frame(minWidth: content.rows.isEmpty ? 0 : 200, alignment: .leading)
+        .popoverSurface()
     }
 }
 
@@ -759,19 +823,15 @@ struct GlassSegmentedControl<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(Value, String)]
     var height: CGFloat = 20
-    /// 每个选项用自己的字体显示（例如字体选择器），为 nil 时用界面字体
-    var labelFont: ((Value) -> Font)?
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var thumb
 
-    init(_ title: String, selection: Binding<Value>, options: [(Value, String)], height: CGFloat = 20,
-         labelFont: ((Value) -> Font)? = nil) {
+    init(_ title: String, selection: Binding<Value>, options: [(Value, String)], height: CGFloat = 20) {
         self.title = title
         self._selection = selection
         self.options = options
         self.height = height
-        self.labelFont = labelFont
     }
 
     var body: some View {
@@ -780,7 +840,7 @@ struct GlassSegmentedControl<Value: Hashable>: View {
             ForEach(options.indices, id: \.self) { index in
                 let option = options[index]
                 SegmentButton(title: option.1, selected: selection == option.0, height: height,
-                              font: labelFont?(option.0), thumb: thumb, reduceMotion: reduceMotion) {
+                              thumb: thumb, reduceMotion: reduceMotion) {
                     selection = option.0
                 }
             }
@@ -801,7 +861,6 @@ private struct SegmentButton: View {
     let title: String
     let selected: Bool
     let height: CGFloat
-    let font: Font?
     let thumb: Namespace.ID
     let reduceMotion: Bool
     let action: () -> Void
@@ -812,7 +871,7 @@ private struct SegmentButton: View {
         let shape = RoundedRectangle(cornerRadius: height / 2 - 2.5, style: .continuous)
         Button(action: action) {
             Text(title)
-                .font(font ?? Typeface.ui(height <= 18 ? 10.5 : 11, selected ? .semibold : .medium))
+                .font(Typeface.ui(height <= 18 ? 10.5 : 11, selected ? .semibold : .medium))
                 .foregroundStyle(selected || hover.hovering ? Color.primary : Ink.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -906,6 +965,96 @@ struct PressScaleStyle: ButtonStyle {
 struct SubtleButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         HoverHighlight(pressed: configuration.isPressed) { configuration.label }
+    }
+}
+
+/// 圆形图标按钮：平时只有一圈很淡的底，悬停变亮，按下缩小。用于页眉、页脚这类工具按钮
+struct IconButtonStyle: ButtonStyle {
+    var diameter: CGFloat = 26
+
+    func makeBody(configuration: Configuration) -> some View {
+        IconButtonFace(pressed: configuration.isPressed, diameter: diameter) { configuration.label }
+    }
+}
+
+private struct IconButtonFace<Label: View>: View {
+    let pressed: Bool
+    let diameter: CGFloat
+    @ViewBuilder var label: Label
+    @StateObject private var hover = HoverState()
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let dark = scheme == .dark
+        let fill = pressed ? 0.16 : hover.hovering ? 0.11 : 0.055
+        label
+            .font(Typeface.ui(11.5, .medium))
+            .foregroundStyle(hover.hovering ? Color.primary : Ink.secondary)
+            .frame(width: diameter, height: diameter)
+            .background {
+                Circle().fill(dark ? Color.white.opacity(fill + 0.01) : Color.black.opacity(fill * 0.8))
+            }
+            .contentShape(Circle())
+            .scaleEffect(pressed ? 0.92 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.7), value: pressed)
+            .animation(.easeOut(duration: 0.12), value: hover.hovering)
+            .onHover { hover.hovering = $0 }
+    }
+}
+
+/// 面板里的开关。面板属于后台应用、从不激活，系统开关在这里打开时也是灰色，看不出开没开；
+/// 自己画一个：打开时用强调色，旋钮带弹簧滑动
+struct PanelSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        PanelSwitch(isOn: configuration.$isOn) { configuration.label }
+    }
+}
+
+private struct PanelSwitch<Label: View>: View {
+    @Binding var isOn: Bool
+    @ViewBuilder var label: Label
+    @StateObject private var hover = HoverState()
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let dark = scheme == .dark
+        let width: CGFloat = 30, height: CGFloat = 18, inset: CGFloat = 2
+        let off = dark ? Color.white.opacity(hover.hovering ? 0.2 : 0.15) : Color.black.opacity(hover.hovering ? 0.13 : 0.09)
+        HStack(spacing: 6) {
+            label
+            Capsule(style: .continuous)
+                .fill(isOn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(off))
+                .overlay { Capsule(style: .continuous).strokeBorder(Color.black.opacity(isOn ? 0.06 : 0.04), lineWidth: 0.5) }
+                .overlay(alignment: isOn ? .trailing : .leading) {
+                    Circle()
+                        .fill(.white)
+                        .shadow(color: .black.opacity(0.22), radius: 1.2, y: 0.6)
+                        .padding(inset)
+                }
+                .frame(width: width, height: height)
+                .contentShape(Capsule())
+                .onTapGesture { isOn.toggle() }
+                .onHover { hover.hovering = $0 }
+        }
+        .opacity(enabled ? 1 : 0.5)
+        .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.28, dampingFraction: 0.72), value: isOn)
+        .animation(.easeOut(duration: 0.12), value: hover.hovering)
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityValue(isOn ? L("开", "On") : L("关", "Off"))
+        .accessibilityAction { isOn.toggle() }
+    }
+}
+
+/// 文字在前、小图标在后，例如"活动监视器 ↗"
+struct TrailingIconLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.title
+            configuration.icon.font(Typeface.ui(8.5, .bold)).opacity(0.75)
+        }
     }
 }
 

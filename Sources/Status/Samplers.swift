@@ -642,8 +642,10 @@ enum SystemInfo {
         return brand.replacingOccurrences(of: " (Virtual)", with: "")
     }()
 
+    /// STATUS_COMPUTER_NAME 只用于截图（例如 README 里的图），不暴露真实的电脑名
     static let computerName: String = {
-        (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "Mac"
+        ProcessInfo.processInfo.environment["STATUS_COMPUTER_NAME"]
+            ?? (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "Mac"
     }()
 
     static let osVersion: String = {

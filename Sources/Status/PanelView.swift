@@ -20,8 +20,8 @@ struct PanelView: View {
         .padding(Metrics.panelPadding)
         .padding(.top, 2)
         .frame(width: StatusPanel.panelWidth)
-        // 换字体或语言时整块重建，所有文字立即更新
-        .id("\(prefs.font.rawValue)-\(prefs.language.rawValue)")
+        // 换语言时整块重建，所有文字立即更新
+        .id(prefs.language.rawValue)
         .environment(\.hintCenter, hints)
         .overlay(alignment: .topLeading) { HintOverlay(center: hints) }
         .onChange(of: prefs.page) { _, _ in hints.dismiss() }
@@ -71,56 +71,62 @@ struct PanelView: View {
     // MARK: Header / Footer
 
     private var header: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 1) {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(SystemInfo.computerName)
-                    .font(Typeface.ui(13, .semibold))
+                    .font(Typeface.ui(14, .semibold))
+                    .tracking(-0.1)
                     .lineLimit(1)
                 Text("\(SystemInfo.chip) · \(SystemInfo.osVersion) · " + L("已运行 ", "up ") + Fmt.uptime(monitor.uptime))
-                    .font(Typeface.ui(11))
-                    .foregroundStyle(Ink.secondary)
+                    .font(Typeface.ui(10.5, .medium))
+                    .foregroundStyle(Ink.tertiary)
                     .lineLimit(1)
             }
-            Spacer()
+            Spacer(minLength: 4)
             Button { prefs.page = prefs.page == .overview ? .settings : .overview } label: {
-                Image(systemName: prefs.page == .overview ? "slider.horizontal.3" : "xmark")
-                    .font(Typeface.ui(12, .medium))
-                    .frame(width: 16, height: 16)
+                Image(systemName: prefs.page == .overview ? "gearshape" : "chevron.left")
                     .contentTransition(.symbolEffect(.replace))
             }
-            .buttonStyle(SubtleButtonStyle())
+            .buttonStyle(IconButtonStyle())
             .keyboardShortcut(",")
-            .hint(prefs.page == .overview ? L("设置（⌘,）", "Settings (⌘,)") : L("返回（Esc）", "Back (Esc)"))
+            .accessibilityLabel(prefs.page == .overview ? L("设置", "Settings") : L("返回", "Back"))
         }
-        .padding(.horizontal, 2)
-        .padding(.bottom, 2)
+        .padding(.leading, 4)
+        .padding(.trailing, 1)
+        .padding(.top, 1)
+        .padding(.bottom, 1)
     }
 
     private var footer: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Button {
                 NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
             } label: {
-                Label(L("活动监视器", "Activity Monitor"), systemImage: "arrow.up.forward.app")
+                Label(L("活动监视器", "Activity Monitor"), systemImage: "arrow.up.right")
+                    .labelStyle(TrailingIconLabelStyle())
             }
+            .buttonStyle(SubtleButtonStyle())
+            .foregroundStyle(Ink.secondary)
             Spacer()
             if let release = updater.availableRelease {
                 Button { updater.downloadUpdate() } label: {
                     Label(updater.state == .downloading(release) ? L("正在下载…", "Downloading…") : L("新版本 ", "New version ") + release.version,
-                          systemImage: "arrow.down.circle.fill")
-                        .foregroundStyle(Color.accentColor)
+                          systemImage: "arrow.down")
                 }
+                .buttonStyle(PillButtonStyle(prominent: true))
                 .disabled(updater.state == .downloading(release))
                 .hint(L("下载新版本到“下载”文件夹并打开，把 Status 拖进“应用程序”替换即可", "Downloads the new version to your Downloads folder and opens it. Drag Status into Applications to replace the old one."))
             }
             Button { NSApp.terminate(nil) } label: {
-                Text(L("退出", "Quit"))
+                Image(systemName: "power")
             }
+            .buttonStyle(IconButtonStyle(diameter: 24))
             .keyboardShortcut("q")
+            .accessibilityLabel(L("退出", "Quit"))
         }
-        .font(Typeface.ui(11))
-        .foregroundStyle(Ink.secondary)
-        .buttonStyle(SubtleButtonStyle())
+        .font(Typeface.ui(11, .medium))
+        .padding(.leading, -4)
+        .padding(.trailing, 1)
     }
 
     // MARK: Overview
@@ -156,50 +162,44 @@ struct PanelView: View {
     }
 
     private var cpuTile: some View {
-        Tile(title: "CPU", symbol: "cpu", tint: Palette.cpu) {
-            if let t = monitor.temperature, let temp = t.cpu {
-                TemperatureBadge(celsius: temp).hint(temperatureHelp(t))
+        Tile(title: "CPU", symbol: "cpu") {
+            if let temp = monitor.temperature?.cpu {
+                TemperatureBadge(celsius: temp)
             } else if let load = monitor.loadAverage.first {
-                Text(String(format: "%.2f", load)).monospacedDigit().hint(L("1 分钟平均负载", "1-minute load average"))
+                Text(String(format: "%.2f", load)).monospacedDigit()
             }
         } content: {
             BigNumber(value: Fmt.percent(monitor.cpu.usage), unit: "%")
-                .hint(monitor.loadAverage.isEmpty ? "" : L("平均负载 ", "Load average ") + monitor.loadAverage.map { String(format: "%.2f", $0) }.joined(separator: " / "))
-            Sparkline(values: monitor.cpuHistory, maxValue: 100, tint: Palette.cpu,
+            Sparkline(values: monitor.cpuHistory, maxValue: 100, tint: Palette.cpu, guides: [0.5],
                       readout: ChartReadout(interval: prefs.interval) { [history = monitor.cpuHistory] in
                           "\(Fmt.percent(history[$0]))%"
                       })
-                .frame(minHeight: 24, maxHeight: .infinity)
+                .frame(minHeight: 28, maxHeight: .infinity)
             CoreBars(cores: monitor.cpu.cores, tint: Palette.cpu)
-                .frame(height: 12)
-                .hint(L("每个核心的占用", "Usage of each core"))
-            HStack(spacing: 10) {
-                Text(L("用户 ", "User ") + "\(Fmt.percent(monitor.cpu.user))%")
-                Text(L("系统 ", "System ") + "\(Fmt.percent(monitor.cpu.system))%")
+                .frame(height: 14)
+            HStack(spacing: 12) {
+                InlineStat(label: L("用户", "User"), value: "\(Fmt.percent(monitor.cpu.user))%")
+                InlineStat(label: L("系统", "System"), value: "\(Fmt.percent(monitor.cpu.system))%")
             }
-            .lineLimit(1)
-            .font(Typeface.ui(10.5, .medium))
-            .foregroundStyle(Ink.secondary)
-            .monospacedDigit()
         }
     }
 
     private var memoryTile: some View {
         let m = monitor.memory
         let (used, unit) = Fmt.bytesParts(Double(m.used), base: 1024)
-        return Tile(title: L("内存", "Memory"), symbol: "memorychip", tint: Palette.memory) {
+        return Tile(title: L("内存", "Memory"), symbol: "memorychip") {
             if m.pressureLevel > 1 {
                 PressureBadge(level: m.pressureLevel)
             } else {
                 Text("\(Fmt.percent(m.usedPercent))%").monospacedDigit()
-                    .hint(L("内存压力正常。macOS 会主动把空闲内存用作缓存并压缩不常用的数据，所以占用高是正常的，只有内存压力升高时才需要关注。", "Memory pressure is normal. macOS uses free memory as cache and compresses data you are not using, so high usage is expected. It only matters when memory pressure rises."))
             }
         } content: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 BigNumber(value: used, unit: unit)
                 Text("/ \(Fmt.memory(m.total))")
-                    .font(Typeface.ui(11))
+                    .font(Typeface.ui(10.5, .medium))
                     .foregroundStyle(Ink.tertiary)
+                    .lineLimit(1)
             }
             SegmentBar(segments: [
                 (Double(m.app), Palette.memory),
@@ -217,24 +217,25 @@ struct PanelView: View {
     }
 
     private var gpuTile: some View {
-        Tile(title: "GPU", symbol: "square.stack.3d.up", tint: Palette.gpu) {
+        Tile(title: "GPU", symbol: "square.stack.3d.up") {
             if let temp = monitor.temperature?.gpu {
-                TemperatureBadge(celsius: temp).hint(L("GPU 温度", "GPU temperature"))
+                TemperatureBadge(celsius: temp)
             }
         } content: {
             BigNumber(value: Fmt.percent(monitor.gpu ?? 0), unit: "%")
-            Sparkline(values: monitor.gpuHistory, maxValue: 100, tint: Palette.gpu,
+            Sparkline(values: monitor.gpuHistory, maxValue: 100, tint: Palette.gpu, guides: [0.5],
                       readout: ChartReadout(interval: prefs.interval) { [history = monitor.gpuHistory] in
                           "\(Fmt.percent(history[$0]))%"
                       })
-                .frame(minHeight: 24, maxHeight: .infinity)
+                .frame(minHeight: 28, maxHeight: .infinity)
         }
     }
 
     private var diskTile: some View {
         let d = monitor.disk
         let (free, unit) = Fmt.bytesParts(Double(d.free))
-        return Tile(title: d.name, symbol: "internaldrive", tint: Palette.disk) {
+        // 卷名放在悬停提示里：标题统一成"磁盘"，长卷名不会把标题挤断
+        return Tile(title: L("磁盘", "Disk"), symbol: "internaldrive") {
             Text("\(Fmt.percent(d.usedPercent))%").monospacedDigit()
         } content: {
             BigNumber(value: free, unit: unit + L(" 可用", " free"))
@@ -253,7 +254,6 @@ struct PanelView: View {
             if prefs.enableClaudeDiagnostics {
                 Button { prefs.page = .network } label: { networkTile(n) }
                     .buttonStyle(CardButtonStyle())
-                    .hint(L("查看 Claude 网络诊断", "Open Claude network diagnostics"))
                     .accessibilityLabel(L("网络，查看 Claude 网络诊断", "Network, open Claude network diagnostics"))
             } else {
                 networkTile(n)
@@ -262,7 +262,7 @@ struct PanelView: View {
     }
 
     private func networkTile(_ n: NetworkSnapshot) -> some View {
-        Tile(title: L("网络", "Network"), symbol: "network", tint: Palette.down) {
+        Tile(title: L("网络", "Network"), symbol: "network") {
             HStack(spacing: 5) {
                 Text(n.address ?? L("未连接", "Not connected")).monospacedDigit().textSelection(.enabled)
                 if prefs.enableClaudeDiagnostics {
@@ -279,7 +279,8 @@ struct PanelView: View {
                         readout: ChartReadout(interval: prefs.interval) { [down = monitor.downHistory, up = monitor.upHistory] in
                             "↓ \(Fmt.rate(down[$0]))  ↑ \(Fmt.rate(up.indices.contains($0) ? up[$0] : 0))"
                         })
-                .frame(height: 44)
+                .frame(height: 46)
+            Rectangle().fill(Ink.hairline).frame(height: 0.5).padding(.top, 1)
             NetworkQualityRow(wifi: monitor.wifi, latency: monitor.latency)
             HStack {
                 Text(L("开机以来", "Since boot") + "  ↓ \(Fmt.bytes(n.totalDown))  ↑ \(Fmt.bytes(n.totalUp))")
@@ -310,9 +311,8 @@ private struct NetworkQualityRow: View {
                     Image(systemName: "wifi", variableValue: wifi.strength)
                         .font(Typeface.ui(10, .semibold))
                         .foregroundStyle(Palette.down)
-                    Text(verbatim: wifi.rate >= 1000 ? String(format: "%.1f Gbps", wifi.rate / 1000) : String(format: "%.0f Mbps", wifi.rate))
+                    Text(verbatim: Self.rate(wifi.rate))
                 }
-                .hint(help(for: wifi))
             } else {
                 Label(L("有线或未连接 Wi-Fi", "Wired or no Wi-Fi"), systemImage: "cable.connector.horizontal")
                     .labelStyle(.titleAndIcon)
@@ -323,30 +323,53 @@ private struct NetworkQualityRow: View {
                 chip(L("互联网", "Internet"), latency?.internet)
             }
             .fixedSize()
-            .hint(latencyHint)
         }
         .lineLimit(1)
         .font(Typeface.ui(10.5, .medium))
         .foregroundStyle(Ink.secondary)
         .monospacedDigit()
         .frame(height: 14)
+        // 整行都能触发，比只挂在小小的延迟数字上容易得多
+        .padding(.vertical, 4)
+        .hint(details)
+        .padding(.vertical, -4)
     }
 
-    private var latencyHint: String {
-        var lines = [L("往返延迟（越低越好）", "Round-trip latency (lower is better)")]
-        if let gateway = latency?.gateway { lines.append(L("网关（你的路由器）", "Router") + String(format: "：%.0f ms", gateway)) }
-        lines.append(L("互联网取以下任播 DNS 中最快的一个：", "Internet is the fastest of these anycast DNS servers:"))
-        for target in latency?.targets ?? [] {
-            lines.append("  \(target.name) \(target.host)  " + (target.milliseconds.map { String(format: "%.0f ms", $0) } ?? L("无响应", "no reply")))
+    private static func rate(_ mbps: Double) -> String {
+        mbps >= 1000 ? String(format: "%.1f Gbps", mbps / 1000) : String(format: "%.0f Mbps", mbps)
+    }
+
+    private static func ms(_ value: Double?) -> String {
+        value.map { String(format: "%.0f ms", $0) } ?? L("无响应", "No reply")
+    }
+
+    private static func latencyTint(_ value: Double?) -> Color {
+        switch value {
+        case nil: Ink.tertiary
+        case let v? where v < 60: Palette.battery
+        case let v? where v < 150: Color.orange
+        default: Color.red
         }
-        return lines.joined(separator: "\n")
     }
 
-    /// 返回 String（而不是字面量）让 .help 原样显示，不做本地化和数字分组
-    private func help(for wifi: WiFiSnapshot) -> String {
-        let band = wifi.band.isEmpty ? "" : L("（\(wifi.band)）", " (\(wifi.band))")
-        return L("Wi-Fi 信号 \(wifi.rssi) dBm，噪声 \(wifi.noise) dBm，信噪比 \(wifi.rssi - wifi.noise) dB\n信道 \(wifi.channel)\(band)，当前速率 \(Int(wifi.rate)) Mbps",
-                 "Wi-Fi signal \(wifi.rssi) dBm, noise \(wifi.noise) dBm, SNR \(wifi.rssi - wifi.noise) dB\nChannel \(wifi.channel)\(band), link rate \(Int(wifi.rate)) Mbps")
+    /// Wi-Fi 信号和各个目标的往返延迟
+    private var details: HintContent {
+        var rows: [HintContent.Row] = []
+        if let wifi {
+            rows.append(.init(label: L("信号", "Signal"), value: "\(wifi.rssi) dBm"))
+            rows.append(.init(label: L("信噪比", "SNR"), value: "\(wifi.rssi - wifi.noise) dB"))
+            rows.append(.init(label: L("信道", "Channel"), value: wifi.band.isEmpty ? "\(wifi.channel)" : "\(wifi.channel) · \(wifi.band)"))
+            rows.append(.init(label: L("速率", "Link rate"), value: Self.rate(wifi.rate)))
+        }
+        if let gateway = latency?.gateway {
+            rows.append(.init(label: L("网关", "Router"), value: Self.ms(gateway), tint: Self.latencyTint(gateway)))
+        }
+        for target in latency?.targets ?? [] {
+            rows.append(.init(label: "\(target.name)  \(target.host)", value: Self.ms(target.milliseconds),
+                              tint: Self.latencyTint(target.milliseconds)))
+        }
+        return HintContent(title: wifi == nil ? L("网络质量", "Network Quality") : L("Wi-Fi 与延迟", "Wi-Fi & Latency"), rows: rows,
+                           note: L("“互联网”取以上任播 DNS 中最快的一个，只在面板打开时测量。", "Internet is the fastest of these anycast DNS servers, measured only while the panel is open."))
     }
 
     private func chip(_ label: String, _ milliseconds: Double?) -> some View {
@@ -371,13 +394,6 @@ private struct NetworkQualityRow: View {
     }
 }
 
-private func temperatureHelp(_ t: TemperatureSnapshot) -> String {
-    var lines = [L("CPU 温度：\(t.cpuSensorCount) 个传感器的平均值", "CPU temperature: average of \(t.cpuSensorCount) sensors")]
-    if let max = t.cpuMax { lines.append(String(format: L("其中最高 %.0f°C", "Hottest %.0f°C"), max)) }
-    lines.append(L("来源：", "Source: ") + t.cpuSource)
-    return lines.joined(separator: "\n")
-}
-
 private struct RateView: View {
     let symbol: String
     let tint: Color
@@ -385,12 +401,30 @@ private struct RateView: View {
 
     var body: some View {
         let (number, unit) = Fmt.bytesParts(value)
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: symbol)
-                .font(Typeface.ui(11, .bold))
+                .font(Typeface.ui(8.5, .heavy))
                 .foregroundStyle(tint)
-            BigNumber(value: number, unit: "\(unit)/s", size: 20)
+                .frame(width: 16, height: 16)
+                .background { Circle().fill(tint.opacity(0.16)) }
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+            BigNumber(value: number, unit: "\(unit)/s", size: 21)
         }
+    }
+}
+
+/// 小号的"标签 数值"：标签淡、数值实，用在大数字下面的补充信息
+private struct InlineStat: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label).foregroundStyle(Ink.tertiary)
+            Text(value).foregroundStyle(Ink.secondary).monospacedDigit()
+        }
+        .font(Typeface.ui(10.5, .medium))
+        .lineLimit(1)
     }
 }
 
@@ -426,42 +460,50 @@ private struct ProcessCard: View {
     @EnvironmentObject private var prefs: Preferences
 
     var body: some View {
-        let rows = prefs.processSort == .cpu ? monitor.topByCPU : monitor.topByMemory
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
+        let byCPU = prefs.processSort == .cpu
+        let rows = byCPU ? monitor.topByCPU : monitor.topByMemory
+        // 热度条：CPU 按"占满一个核心"计满，内存按榜首计满，只用来比较各行
+        let scale = byCPU ? max(100, rows.map(\.cpu).max() ?? 0) : Double(max(rows.map(\.memory).max() ?? 1, 1))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
                 Image(systemName: "list.bullet")
-                    .font(Typeface.ui(10, .bold))
-                    .foregroundStyle(Ink.secondary)
-                Text(L("进程", "Processes"))
-                    .font(Typeface.ui(11, .medium))
-                    .foregroundStyle(Ink.secondary)
+                    .font(Typeface.ui(9.5, .semibold))
+                    .foregroundStyle(Ink.tertiary)
+                    .frame(width: 12)
+                SectionLabel(L("进程", "Processes"))
                 Spacer()
                 GlassSegmentedControl(L("进程排序", "Sort processes"), selection: $prefs.processSort,
                                       options: [(.cpu, "CPU"), (.memory, L("内存", "Memory"))], height: 18)
             }
-            VStack(spacing: 3) {
+            .frame(height: 18)
+            VStack(spacing: 2) {
                 ForEach(rows) { row in
-                    ProcessRow(row: row, value: prefs.processSort == .cpu
-                               ? String(format: "%.1f%%", row.cpu) : Fmt.memory(row.memory))
+                    ProcessRow(row: row,
+                               value: byCPU ? String(format: "%.1f%%", row.cpu) : Fmt.memory(row.memory),
+                               fraction: byCPU ? row.cpu / scale : Double(row.memory) / scale,
+                               tint: byCPU ? Palette.cpu : Palette.memory)
                 }
             }
             // 排名变化时各行滑到新位置，而不是原地跳字
             .animation(.snappy(duration: 0.35), value: rows.map(\.id))
             // 固定 5 行的高度：刚打开、进程还没采到时卡片也不会变矮
-            .frame(height: 5 * 20 + 4 * 3, alignment: .top)
+            .frame(height: 5 * 22 + 4 * 2, alignment: .top)
         }
-        .padding(10)
+        .padding(12)
         .card()
     }
 }
 
-/// 一行进程：悬停高亮，右键可以在访达中显示或退出应用
+/// 一行进程：底下一条很淡的热度条表示占用，悬停高亮，右键可以在访达中显示或退出应用
 private struct ProcessRow: View {
     let row: ProcessEntry
     let value: String
+    let fraction: Double
+    let tint: Color
     @StateObject private var hover = HoverState()
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
         HStack(spacing: 8) {
             Image(nsImage: row.icon)
                 .resizable()
@@ -472,22 +514,28 @@ private struct ProcessRow: View {
                 .truncationMode(.middle)
             Spacer(minLength: 8)
             Text(value)
+                .font(Typeface.ui(11.5, .medium))
                 .monospacedDigit()
                 .foregroundStyle(Ink.secondary)
-                .contentTransition(.numericText())
         }
         .font(Typeface.ui(12))
-        .frame(height: 20)
-        .padding(.horizontal, 5)
+        .frame(height: 22)
+        .padding(.horizontal, 6)
         .background {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(hover.hovering ? 0.06 : 0))
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    shape.fill(Color.primary.opacity(hover.hovering ? 0.06 : 0))
+                    shape.fill(LinearGradient(colors: [tint.opacity(0.05), tint.opacity(0.17)], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: geo.size.width * min(max(fraction, 0), 1))
+                        .opacity(fraction > 0.004 ? 1 : 0)
+                }
+            }
         }
-        .padding(.horizontal, -5)
+        .padding(.horizontal, -6)
         .contentShape(Rectangle())
         .onHover { hover.hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hover.hovering)
-        .hint("\(row.name)\nPID \(row.id) · CPU \(String(format: "%.1f%%", row.cpu)) · " + L("内存 ", "Memory ") + Fmt.memory(row.memory) + "\n" + L("右键查看更多操作", "Right-click for more actions"))
+        .animation(.easeOut(duration: 0.4), value: fraction)
         .contextMenu { ProcessMenu(row: row) }
     }
 }
@@ -529,12 +577,12 @@ private struct SettingsView: View {
     private var sections: some View {
         VStack(alignment: .leading, spacing: 8) {
             section(L("菜单栏显示", "Menu Bar")) {
-                toggle("CPU", "cpu", $prefs.showCPU)
-                toggle(L("CPU 温度", "CPU temperature"), "thermometer.medium", $prefs.showTemperature)
-                toggle(L("内存", "Memory"), "memorychip", $prefs.showMemory)
-                toggle("GPU", "square.stack.3d.up", $prefs.showGPU)
-                toggle(L("网速", "Network speed"), "network", $prefs.showNetwork)
-                toggle(L("电池", "Battery"), "battery.75percent", $prefs.showBattery)
+                toggle("CPU", "cpu", Palette.cpu, $prefs.showCPU)
+                toggle(L("CPU 温度", "CPU temperature"), "thermometer.medium", Color(red: 1, green: 0.42, blue: 0.36), $prefs.showTemperature)
+                toggle(L("内存", "Memory"), "memorychip", Palette.memory, $prefs.showMemory)
+                toggle("GPU", "square.stack.3d.up", Palette.gpu, $prefs.showGPU)
+                toggle(L("网速", "Network speed"), "network", Palette.down, $prefs.showNetwork)
+                toggle(L("电池", "Battery"), "battery.75percent", Palette.battery, $prefs.showBattery)
             }
             section(L("通用", "General")) {
                 HStack {
@@ -562,8 +610,7 @@ private struct SettingsView: View {
                     Text(L("登录时启动", "Launch at login"))
                     Spacer()
                     Toggle("", isOn: Binding(get: { prefs.launchAtLogin }, set: { prefs.launchAtLogin = $0 }))
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
+                        .toggleStyle(PanelSwitchStyle())
                         .labelsHidden()
                 }
                 .frame(height: 24)
@@ -580,18 +627,9 @@ private struct SettingsView: View {
                     .padding(.bottom, 4)
                 }
             }
-            section(L("外观", "Appearance")) {
-                // 六个选项放不下标题，选择器单独占一行，每个选项用自己的字体显示
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(L("字体", "Font"))
-                    GlassSegmentedControl(L("字体", "Font"), selection: $prefs.font,
-                                          options: AppFont.allCases.map { ($0, $0.title) },
-                                          labelFont: { Typeface.number(11, weight: .medium, font: $0) })
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-                .padding(.vertical, 3)
+            section(L("语言", "Language")) {
                 HStack {
-                    Text(L("语言", "Language"))
+                    Text(L("界面语言", "Interface language"))
                     Spacer()
                     GlassSegmentedControl(L("语言", "Language"), selection: $prefs.language,
                                           options: AppLanguage.allCases.map { ($0, $0.title) })
@@ -599,17 +637,17 @@ private struct SettingsView: View {
                 .frame(height: 24)
             }
             section(L("提醒", "Alerts")) {
-                toggle(L("电量低于 20%", "Battery below 20%"), "battery.25percent", $prefs.alertLowBattery)
-                toggle(L("CPU 持续过热", "CPU running hot"), "thermometer.high", $prefs.alertHot)
-                toggle(L("内存压力过高", "Memory pressure critical"), "memorychip", $prefs.alertMemory)
-                toggle(L("磁盘空间不足 10 GB", "Less than 10 GB disk space"), "internaldrive", $prefs.alertDisk)
-                toggle(L("进程持续占满 CPU 5 分钟", "Process maxing CPU for 5 min"), "flame", $prefs.alertRunaway)
+                toggle(L("电量低于 20%", "Battery below 20%"), "battery.25percent", Palette.battery, $prefs.alertLowBattery)
+                toggle(L("CPU 持续过热", "CPU running hot"), "thermometer.high", Color(red: 1, green: 0.42, blue: 0.36), $prefs.alertHot)
+                toggle(L("内存压力过高", "Memory pressure critical"), "memorychip", Palette.memory, $prefs.alertMemory)
+                toggle(L("磁盘空间不足 10 GB", "Less than 10 GB disk space"), "internaldrive", Palette.disk, $prefs.alertDisk)
+                toggle(L("进程持续占满 CPU 5 分钟", "Process maxing CPU for 5 min"), "flame.fill", Color(red: 1, green: 0.55, blue: 0.25), $prefs.alertRunaway)
             }
             .onChange(of: prefs.anyAlertEnabled) { _, enabled in
                 if enabled { monitor.alerts.requestAuthorizationIfNeeded() }
             }
             section(L("网络诊断", "Network Diagnostics")) {
-                toggle(L("Claude IP 出口检测", "Claude exit IP check"), "globe", $prefs.enableClaudeDiagnostics)
+                toggle(L("Claude IP 出口检测", "Claude exit IP check"), "globe", Color(red: 0.85, green: 0.52, blue: 0.38), $prefs.enableClaudeDiagnostics)
                 Text(L("关闭后隐藏诊断入口并停止检测，网速与流量统计照常显示。", "When off, the diagnostics page is hidden and checks stop. Network speed and traffic stay visible."))
                     .font(Typeface.ui(10.5))
                     .foregroundStyle(Ink.tertiary)
@@ -632,8 +670,7 @@ private struct SettingsView: View {
                 Text(L("自动检查更新", "Check for updates automatically"))
                 Spacer()
                 Toggle("", isOn: Binding(get: { updater.autoCheck }, set: { updater.autoCheck = $0 }))
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
+                    .toggleStyle(PanelSwitchStyle())
                     .labelsHidden()
             }
             .frame(height: 24)
@@ -649,7 +686,6 @@ private struct SettingsView: View {
             .font(Typeface.ui(11.5))
             .foregroundStyle(Ink.secondary)
             .frame(height: 24)
-            .hint(L("在 GitHub 上查看", "View on GitHub"))
         }
     }
 
@@ -673,7 +709,6 @@ private struct SettingsView: View {
                         .foregroundStyle(Palette.battery)
                 }
                 .buttonStyle(PillButtonStyle())
-                .hint(L("点击再检查一次", "Click to check again"))
             case .available(let release), .downloading(let release):
                 Button { updater.downloadUpdate() } label: {
                     Label(updater.state == .downloading(release) ? L("正在下载…", "Downloading…") : L("下载 ", "Download ") + release.version,
@@ -698,32 +733,46 @@ private struct SettingsView: View {
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(Typeface.ui(11, .medium))
-                .foregroundStyle(Ink.secondary)
-                .padding(.leading, 2)
+        VStack(alignment: .leading, spacing: 6) {
+            SectionLabel(title)
+                .padding(.leading, 4)
             VStack(spacing: 2, content: content)
                 .font(Typeface.ui(12))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .card()
         }
+        .padding(.top, 2)
     }
 
-    private func toggle(_ title: String, _ symbol: String, _ binding: Binding<Bool>) -> some View {
-        HStack {
-            Image(systemName: symbol)
-                .frame(width: 18)
-                .foregroundStyle(Ink.secondary)
+    private func toggle(_ title: String, _ symbol: String, _ tint: Color, _ binding: Binding<Bool>) -> some View {
+        HStack(spacing: 9) {
+            SettingsIcon(symbol: symbol, tint: tint)
             Text(title)
             Spacer()
             Toggle("", isOn: binding)
-                .toggleStyle(.switch)
-                .controlSize(.mini)
+                .toggleStyle(PanelSwitchStyle())
                 .labelsHidden()
         }
         .frame(height: 24)
+    }
+}
+
+/// 设置项前的小图标：彩色圆角方块 + 白色符号，和系统设置一致
+private struct SettingsIcon: View {
+    let symbol: String
+    let tint: Color
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
+        Image(systemName: symbol)
+            .font(Typeface.ui(9.5, .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 20, height: 20)
+            .background {
+                shape.fill(LinearGradient(colors: [tint.opacity(0.92), tint], startPoint: .top, endPoint: .bottom))
+                    .overlay { shape.strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5) }
+            }
     }
 }
 

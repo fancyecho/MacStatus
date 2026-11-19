@@ -94,7 +94,7 @@ private struct BatteryHistoryCard: View {
     @StateObject private var hover = HoverLocation()
 
     var body: some View {
-        Tile(title: L("最近 24 小时", "Last 24 Hours"), symbol: "chart.xyaxis.line", tint: Palette.battery) {
+        Tile(title: L("最近 24 小时", "Last 24 Hours"), symbol: "chart.xyaxis.line") {
             if points.count >= 2, let low = points.map(\.percent).min(), let high = points.map(\.percent).max() {
                 Text("\(low)% – \(high)%").monospacedDigit()
             }
@@ -133,7 +133,7 @@ private struct BatteryHistoryCard: View {
                 // 充电时段
                 ForEach(chargingSpans(), id: \.0) { span in
                     Rectangle()
-                        .fill(Palette.battery.opacity(0.13))
+                        .fill(Palette.battery.opacity(0.1))
                         .frame(width: max(1, x(span.1) - x(span.0)), height: size.height)
                         .offset(x: x(span.0))
                 }
@@ -142,6 +142,15 @@ private struct BatteryHistoryCard: View {
                     path.addLine(to: CGPoint(x: size.width, y: y(20)))
                 }
                 .stroke(Color.red.opacity(0.35), style: StrokeStyle(lineWidth: 0.8, dash: [2, 3]))
+                // 长时间没有数据（深度睡眠、关机）的地方用一段淡淡的虚线连过去，曲线不断开
+                Path { path in
+                    for (previous, next) in zip(segments, segments.dropFirst()) {
+                        guard let end = previous.last, let start = next.first else { continue }
+                        path.move(to: CGPoint(x: x(end.time), y: y(end.percent)))
+                        path.addLine(to: CGPoint(x: x(start.time), y: y(start.percent)))
+                    }
+                }
+                .stroke(Palette.battery.opacity(0.55), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [2, 3]))
                 ForEach(segments.indices, id: \.self) { index in
                     let segment = segments[index]
                     let line = Path { path in
@@ -151,9 +160,14 @@ private struct BatteryHistoryCard: View {
                         }
                     }
                     closedArea(line, from: x(segment[0].time), to: x(segment[segment.count - 1].time), bottom: size.height)
-                        .fill(LinearGradient(colors: [Palette.battery.opacity(0.28), Palette.battery.opacity(0)],
+                        .fill(LinearGradient(colors: [Palette.battery.opacity(0.24), Palette.battery.opacity(0)],
                                              startPoint: .top, endPoint: .bottom))
                     line.stroke(Palette.battery, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                    // 只有一个点的段画成小圆点，否则看不见
+                    if segment.count == 1 {
+                        Circle().fill(Palette.battery).frame(width: 3, height: 3)
+                            .position(x: x(segment[0].time), y: y(segment[0].percent))
+                    }
                 }
                 Color.clear
                     .contentShape(Rectangle())
@@ -219,7 +233,7 @@ struct PeripheralsCard: View {
     let devices: [PeripheralBattery]
 
     var body: some View {
-        Tile(title: L("外设电量", "Peripherals"), symbol: "dot.radiowaves.left.and.right", tint: Palette.down) {
+        Tile(title: L("外设电量", "Peripherals"), symbol: "dot.radiowaves.left.and.right") {
             EmptyView()
         } content: {
             VStack(spacing: 7) {
@@ -417,7 +431,6 @@ struct BatterySummaryCard: View {
         }
         .buttonStyle(CardButtonStyle())
         .card()
-        .hint(L("查看电池详情", "Open battery details"))
     }
 }
 
@@ -557,11 +570,10 @@ private struct PowerFlowCard: View {
 
     var body: some View {
         let b = battery
-        Tile(title: L("电源流向", "Power Flow"), symbol: "bolt.fill", tint: PowerPalette.adapter) {
+        Tile(title: L("电源流向", "Power Flow"), symbol: "bolt.fill") {
             if b.onAC {
-                Text(verbatim: [b.adapterWatts.map { "\($0) W" }, b.adapterName].compactMap { $0 }.joined(separator: " "))
+                Text(verbatim: adapterLabel(b))
                     .lineLimit(1)
-                    .hint(L("电源适配器额定功率", "Adapter rated power"))
             }
         } content: {
             VStack(spacing: 5) {
@@ -607,6 +619,14 @@ private struct PowerFlowCard: View {
     }
 
     private var interval: Double { prefs.interval }
+
+    /// "35 W USB-C Power Adapter"：名称里已经带了功率（例如"35W USB-C…"）时不再重复
+    private func adapterLabel(_ b: BatterySnapshot) -> String {
+        let watts = b.adapterWatts.map { "\($0) W" }
+        guard let name = b.adapterName, !name.isEmpty else { return watts ?? "" }
+        if let w = b.adapterWatts, name.replacingOccurrences(of: " ", with: "").contains("\(w)W") { return name }
+        return [watts, name].compactMap { $0 }.joined(separator: " ")
+    }
 
     private var batteryColumnTitle: String {
         guard let power = battery.batteryPower, abs(power) >= 0.05 else { return L("电池", "Battery") }
@@ -663,14 +683,14 @@ private struct PowerFlowCard: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(height: 18)
-                .contentTransition(.numericText())
+                .contentTransition(.opacity)
             Text(title)
                 .font(Typeface.ui(10.5, .medium))
                 .foregroundStyle(Ink.secondary)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
-        .animation(.snappy(duration: 0.3), value: value)
+        .animation(.easeInOut(duration: 0.25), value: value)
     }
 }
 
@@ -679,7 +699,7 @@ private struct HealthCard: View {
 
     var body: some View {
         let b = battery
-        Tile(title: L("电池健康", "Battery Health"), symbol: "heart.fill", tint: Color(red: 1.0, green: 0.42, blue: 0.5)) {
+        Tile(title: L("电池健康", "Battery Health"), symbol: "heart.fill") {
             if let full = b.fullCapacity, let design = b.designCapacity {
                 Text(verbatim: "\(full) / \(design) mAh").monospacedDigit()
             }
@@ -694,7 +714,6 @@ private struct HealthCard: View {
                     .font(Typeface.ui(11, .medium))
                     .foregroundStyle(healthColor)
             }
-            .hint(L("满充容量与设计容量之比，对应 系统设置 › 电池 › 电池健康 里的\"最大容量\"", "Full-charge capacity compared with design capacity, the same as Maximum Capacity in System Settings › Battery › Battery Health"))
             MeterBar(fraction: Double(b.health ?? 0) / 100, tint: healthColor)
                 .padding(.bottom, 4)
             Grid(horizontalSpacing: 8, verticalSpacing: 8) {

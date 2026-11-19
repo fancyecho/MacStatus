@@ -28,12 +28,6 @@ final class Preferences: ObservableObject {
     @Published var alertDisk: Bool { didSet { defaults.set(alertDisk, forKey: "alertDisk") } }
     @Published var alertRunaway: Bool { didSet { defaults.set(alertRunaway, forKey: "alertRunaway") } }
 
-    @Published var font: AppFont {
-        didSet {
-            Typeface.current = font
-            defaults.set(font.rawValue, forKey: "font")
-        }
-    }
     @Published var language: AppLanguage {
         didSet {
             Lang.setting = language
@@ -73,9 +67,7 @@ final class Preferences: ObservableObject {
         alertMemory = defaults.bool(forKey: "alertMemory")
         alertDisk = defaults.bool(forKey: "alertDisk")
         alertRunaway = defaults.bool(forKey: "alertRunaway")
-        font = AppFont(rawValue: defaults.string(forKey: "font") ?? "") ?? .geist
         language = AppLanguage(rawValue: defaults.string(forKey: "language") ?? "") ?? .system
-        Typeface.current = font
         Lang.setting = language
     }
 
@@ -399,6 +391,20 @@ final class SystemMonitor: ObservableObject {
         battery = b
         recordPower(b, chart: true)
         batteryEstimate = estimate(b)
+        // 进程列表也用系统自带的应用模拟，截图里不出现真实在跑的程序
+        let samples: [(String, String, Double, UInt64)] = [
+            ("Safari", "/Applications/Safari.app", 38, 1_900_000_000),
+            ("Xcode", "/Applications/Xcode.app", 24, 3_400_000_000),
+            ("Music", "/System/Applications/Music.app", 9.5, 420_000_000),
+            ("Finder", "/System/Library/CoreServices/Finder.app", 3.2, 260_000_000),
+            ("Mail", "/System/Applications/Mail.app", 1.4, 310_000_000),
+        ]
+        let entries = samples.enumerated().map { index, sample in
+            ProcessEntry(id: pid_t(900 + index), name: sample.0, icon: NSWorkspace.shared.icon(forFile: sample.1),
+                         cpu: max(0, sample.2 + Double.random(in: -2...2)), memory: sample.3)
+        }
+        topByCPU = entries.sorted { $0.cpu > $1.cpu }
+        topByMemory = entries.sorted { $0.memory > $1.memory }
     }
 
     /// 优先用系统的估计；系统还在"计算中"或设置了充电上限时，用最近约一分钟的平均功率推算：
